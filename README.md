@@ -261,3 +261,6 @@ MIT
 
 <!-- handsoff-issue-13 -->
 - #13: [Contract] [Bug] Reject duplicate IDs within a single register_batch call
+
+<!-- handsoff-issue-14 -->
+- #14: [Contract] [Feature] Add batch metadata-pointer updates with per-item results
