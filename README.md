@@ -253,3 +253,8 @@ The `PAYMENT-REQUIRED` header contains the price, destination wallet, network, a
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-7 -->
+- #7: [MCP] [Bug] state backup restore accepts a file that belongs to another network profile
