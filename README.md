@@ -261,3 +261,6 @@ MIT
 
 <!-- handsoff-issue-8 -->
 - #8: [Contract] [Feature] Add versioned resource migrations with explicit upgrade guards
+
+<!-- handsoff-issue-9 -->
+- #9: [Contract] [Bug] Prevent stale creator indexes after repeated ownership transfers
