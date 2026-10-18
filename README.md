@@ -253,3 +253,8 @@ The `PAYMENT-REQUIRED` header contains the price, destination wallet, network, a
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-11 -->
+- #11: [Contract] [Bug] Make cursor pagination stable when resources are tombstoned
