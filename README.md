@@ -258,3 +258,6 @@ MIT
 
 <!-- handsoff-issue-11 -->
 - #11: [Contract] [Bug] Make cursor pagination stable when resources are tombstoned
+
+<!-- handsoff-issue-13 -->
+- #13: [Contract] [Bug] Reject duplicate IDs within a single register_batch call
