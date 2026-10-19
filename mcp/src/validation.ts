@@ -120,6 +120,14 @@ const ON_CHAIN_RESOURCE_ID: ArgumentSpec = {
   patternHint: "1–24 lowercase letters or digits",
 };
 
+/** Client-chosen key that ties a mindvault_buy attempt to a later status lookup. */
+const IDEMPOTENCY_KEY: ArgumentSpec = {
+  kind: "string",
+  maxLength: 128,
+  pattern: /^[A-Za-z0-9._:-]+$/,
+  patternHint: "letters, digits, dot, dash, underscore, or colon (max 128 chars)",
+};
+
 /** Same rules as profiles.isValidProfileName, expressed as a spec. */
 const PROFILE_NAME: ArgumentSpec = {
   kind: "string",
@@ -305,6 +313,10 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
       max: MAX_SETTLEMENT_TIMEOUT_MS,
     },
     intervalMs: { kind: "integer", min: MIN_SETTLEMENT_INTERVAL_MS },
+    idempotencyKey: IDEMPOTENCY_KEY,
+  },
+  mindvault_purchase_status: {
+    idempotencyKey: { ...IDEMPOTENCY_KEY, required: true },
   },
   mindvault_export_receipts: {
     format: { kind: "enum", values: ["json", "csv", "ndjson"] },

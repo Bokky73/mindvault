@@ -74,6 +74,13 @@ import {
   mockSetTags,
 } from "./mock.js";
 import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
+import { lookupPurchaseStatus, trackPurchaseAttempt } from "./purchaseStatusLookup.js";
+import {
+  cancellableSleep,
+  canceledToolResult,
+  isToolCanceled,
+  runCancellable,
+} from "./toolCancellation.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
@@ -173,6 +180,12 @@ import {
   type TimeoutService,
 } from "./httpTimeout.js";
 import { resolveToolTimeouts, timeoutForTool } from "./toolTimeoutOverrides.js";
+import { assertTimeoutsWithinDeadline, resolveTransportDeadline } from "./timeoutBounds.js";
+import {
+  isAmbiguousOutcome,
+  resolveRegistrationOutcome,
+  uncertainPublishOutcome,
+} from "./publishRetryPolicy.js";
 import {
   describeRetryPolicy,
   formatRetryLog,
@@ -301,6 +314,7 @@ const httpFetch: typeof fetch = MOCK
 
 const TIMEOUTS = resolveTimeouts(process.env);
 const TOOL_TIMEOUTS = resolveToolTimeouts(process.env).overrides;
+assertTimeoutsWithinDeadline(TIMEOUTS, TOOL_TIMEOUTS, resolveTransportDeadline(process.env));
 
 const RETRY_POLICY = retryPolicyFromEnv(process.env);
 
@@ -2004,7 +2018,7 @@ async function fetchPublishStatusData(resourceId: string): Promise<PublishStatus
 }
 
 function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return cancellableSleep(ms);
 }
 
 export async function publishStatus(
@@ -2137,16 +2151,23 @@ async function publish(args: {
   const snapshot = captureProfileSnapshot();
   const apiKey = snapshot.apiKey ?? requireApiKey();
 
-  const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({
-      title: args.title,
-      description: args.description,
-      price: args.price,
-      externalUrl: args.externalUrl,
-    }),
-  });
+  let createRes: ApiResponse<any>;
+  try {
+    createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({
+        title: args.title,
+        description: args.description,
+        price: args.price,
+        externalUrl: args.externalUrl,
+      }),
+    });
+  } catch (err) {
+    // The server may have created the resource even though the response was lost.
+    if (isAmbiguousOutcome(err)) return uncertainPublishOutcome(args.title, args.externalUrl);
+    throw err;
+  }
   if (!createRes.ok)
     throwHttpError({
       operation: "Publish failed",
@@ -2205,10 +2226,20 @@ async function publish(args: {
       .join("\n");
   }
 
-  const registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-  });
+  let registerRes: ApiResponse<any>;
+  try {
+    registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resource.id, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
 
   const onchainStatus: string = registerRes.ok
     ? (registerRes.data.onchainStatus ?? "registered")
@@ -2537,11 +2568,21 @@ export async function registerOnchain(
   const signedXdr = tx.toXDR();
 
   await onProgress?.(3, 3, "Submitting transaction");
-  const submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({ signedXdr }),
-  });
+  let submit: ApiResponse<any>;
+  try {
+    submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({ signedXdr }),
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resourceId, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
   if (!submit.ok) {
     const txHash =
       submit.data && typeof submit.data === "object"
@@ -4025,15 +4066,22 @@ async function dispatchToolOutcome(
         return publishBatch(typedItems, onProgress);
       }
       case "mindvault_buy":
-        return buy(
+        return trackPurchaseAttempt(
+          activeProfileName,
+          optionalString(dryRunArgs, "idempotencyKey"),
           requiredString(dryRunArgs, "resourceId"),
           flag(dryRunArgs, "dryRun"),
-          undefined,
-          onProgress,
-          optionalString(dryRunArgs, "maxAutoPayUsdc"),
-          args.wait,
-          args.timeoutMs,
-          args.intervalMs,
+          () =>
+            buy(
+              requiredString(dryRunArgs, "resourceId"),
+              flag(dryRunArgs, "dryRun"),
+              undefined,
+              onProgress,
+              optionalString(dryRunArgs, "maxAutoPayUsdc"),
+              args.wait,
+              args.timeoutMs,
+              args.intervalMs,
+            ),
         );
       case "mindvault_buy_lease":
         return buyLease(requiredString(args, "resourceId"), requiredString(args, "tier"), {
@@ -4045,6 +4093,8 @@ async function dispatchToolOutcome(
         return leaseStatus(requiredString(args, "resourceId"), optionalString(args, "holder"));
       case "mindvault_purchase_history":
         return purchaseHistoryTool(rawRecord);
+      case "mindvault_purchase_status":
+        return lookupPurchaseStatus(activeProfileName, requiredString(args, "idempotencyKey"));
       case "mindvault_export_receipts":
         return exportReceiptsToolWithTimeout(
           rawRecord,
@@ -4222,7 +4272,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       : undefined;
   try {
     const result = await measureTool(metrics, name, () =>
-      dispatchToolOutcome(name, args, progress?.emit),
+      runCancellable(name, extra?.signal, () => dispatchToolOutcome(name, args, progress?.emit)),
     );
     // Opt-in structured telemetry stream (#891): one OTLP line to stderr per
     // tool call when MINDVAULT_METRICS_EXPORT_CONSOLE is set, so a log
@@ -4232,6 +4282,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     }
     return normalizeToolResult(name, result, hasOutputSchema);
   } catch (err: any) {
+    if (isToolCanceled(err)) return canceledToolResult(name);
     const mapped = mappedErrorOf(err);
     return {
       content: [{ type: "text", text: `Error: ${safeErrorMessage(err)}` }],
