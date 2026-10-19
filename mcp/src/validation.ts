@@ -257,7 +257,7 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
     network: { kind: "enum", values: ["testnet", "mainnet"], required: true },
   },
   mindvault_list_profiles: {},
-  mindvault_browse: { ...CATALOG_FILTER_ARGS },
+  mindvault_browse: { ...CATALOG_FILTER_ARGS, cursor: { kind: "string", maxLength: 512 } },
   mindvault_search: { ...CATALOG_FILTER_ARGS },
   mindvault_preview: { resourceId: RESOURCE_ID },
   mindvault_register: {

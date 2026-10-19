@@ -76,6 +76,7 @@ import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
+import { applyCatalogCursor, attachNextCatalogCursor, nextCatalogCursor } from "./catalogCursor.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
 import { advertisedTools, hasOutputSchema } from "./toolSurface.js";
@@ -1844,6 +1845,9 @@ function catalogSnapshotFor(err: unknown): { resources: unknown[]; notice: strin
 }
 
 async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome> {
+  const resumed = applyCatalogCursor(filters);
+  if (!resumed.ok) return resumed.error;
+  filters = resumed.filters;
   const qs = buildCatalogQueryString(filters);
   const url = qs ? `${BASE_URL}/resources?${qs}` : `${BASE_URL}/resources`;
   let raw: any[] = [];
@@ -1883,7 +1887,10 @@ async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome>
         ? `No resources match ${describeCatalogFilters(filters)}.`
         : "No resources listed yet."
       : items.map(formatResource).join("\n\n");
-  return catalogOutcome(items, body, notice);
+  return attachNextCatalogCursor(
+    catalogOutcome(items, body, notice),
+    items.length > 0 ? nextCatalogCursor(filters, raw.length) : null,
+  );
 }
 
 export async function browse(filters: CatalogFilters = {}): Promise<string> {

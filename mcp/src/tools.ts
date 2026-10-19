@@ -15,6 +15,7 @@
  */
 
 import { catalogFilterInputProperties } from "./catalogFilters.js";
+import { CATALOG_CURSOR_INPUT_PROPERTY } from "./catalogCursor.js";
 import {
   AGENT_STATUS_OUTPUT_SCHEMA,
   ATTESTATION_VERIFICATION_OUTPUT_SCHEMA,
@@ -247,7 +248,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "List resources in the MindVault catalog with the same optional filters as mindvault_search and GET /resources: keyword, price range, verification status, resource type, owner, sort, pagination, tags, and listed state. Sort accepts newest, price_asc, price_desc, or title; results are ordered client-side too, so the order holds even when the backend ignores the parameter.",
     inputSchema: {
       type: "object",
-      properties: { ...catalogFilterInputProperties },
+      properties: {
+        ...catalogFilterInputProperties,
+        cursor: CATALOG_CURSOR_INPUT_PROPERTY,
+      },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,

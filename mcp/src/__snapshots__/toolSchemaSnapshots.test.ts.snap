@@ -187,6 +187,11 @@ exports[`tool schema snapshots > mindvault_browse > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_browse > input schema 1`] = `
 {
   "properties": {
+    "cursor": {
+      "description": "Opaque cursor returned as nextCursor by a previous mindvault_browse page. Resumes at the next page without re-fetching earlier ones. Must be sent with the same filters; a mismatched or expired cursor is rejected, so restart without a cursor. Do not combine with offset.",
+      "maxLength": 512,
+      "type": "string",
+    },
     "limit": {
       "description": "Max number of resources to return (1–100, server default 20).",
       "examples": [
