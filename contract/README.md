@@ -1028,6 +1028,10 @@ Pending --settle_lease--> Active --(ledger >= expiry_ledger)--> expired
 or unexpired lease before expiry via `renew_lease(holder, resource_id, tier, amount, tx_hash)`.
 This extends `expiry_ledger` from the existing `expiry_ledger` by the tier duration with
 zero access gap, validates exact pricing and holder authorization, and emits `leasernw`.
+
+#### Fee Configuration Invariance
+
+Existing active leases retain their original price terms (`Lease::amount`), tier duration, and access rights (`lease_is_active`) through any registry-level fee configuration changes (`set_fee_config`, `set_fee_recipient`, or `set_fee_destination`). Fee configuration adjustments only govern future settlement splits and never retroactively alter, invalidate, or terminate pre-existing active leases. New leases and renewals calculate their price terms at execution time using `lease_price(resource_id, tier)`.
 The creator revokes with `revoke_lease`, which takes effect immediately. Revocation is
 terminal: a revoked lease remains inactive (`lease_is_active == false`) across all resource-state
 transitions (freeze, reactivation, dispute, resolve, and tombstone). `get_lease` returns
