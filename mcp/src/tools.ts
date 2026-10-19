@@ -1569,6 +1569,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "mindvault_support_bundle",
+    description:
+      "Export a redacted support bundle for one incident, identified by the correlation ID a failed tool call reported (mv-...). Includes only the audit-log entries for that incident, the tools they name and their metrics, the active profile's address, and the resolved network settings. Bounded and deterministic; wallet secrets, API keys, tokens and other profiles are never included. Local and read-only, no network calls.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        incidentId: {
+          type: "string",
+          description:
+            "Correlation ID of the incident, as reported by the failing tool call. Example: 'mv-lx3k9a2-4f7q'.",
+          examples: ["mv-lx3k9a2-4f7q"],
+        },
+        maxEntries: {
+          type: "integer",
+          minimum: 1,
+          maximum: 200,
+          description: "Maximum audit-log entries to include (1–200, default 100). Newest are kept.",
+          examples: [50, 200],
+        },
+      },
+      required: ["incidentId"],
+    },
+    annotations: {
+      title: "Export Support Bundle",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
     name: "mindvault_recover_catalog_cache",
     description:
       "Attempt a catalog stale-cache recovery: requests the MCP to refresh or re-fetch catalog index data and provides recovery guidance. Useful when browse results appear stale.",

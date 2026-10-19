@@ -92,6 +92,7 @@ export function groupOf(name: string): string {
       "mindvault_rotate_publisher_key",
       "mindvault_verify_install",
       "mindvault_debug_bundle",
+      "mindvault_support_bundle",
     ].includes(name)
   )
     return "Operations";

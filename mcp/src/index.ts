@@ -76,6 +76,7 @@ import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
+import { supportBundleTool } from "./supportBundle.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
 import { advertisedTools, hasOutputSchema } from "./toolSurface.js";
@@ -4158,6 +4159,8 @@ async function dispatchToolOutcome(
         return formatVerifyInstall(verifyInstall(process.env));
       case "mindvault_debug_bundle":
         return debugBundleTool(rawRecord);
+      case "mindvault_support_bundle":
+        return supportBundleTool(rawRecord);
       case "mindvault_recover_catalog_cache":
         return recoverCatalogCache();
       case "mindvault_wallet_balances":

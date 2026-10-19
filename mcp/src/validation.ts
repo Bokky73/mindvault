@@ -379,6 +379,16 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
     auditLogLines: { kind: "integer", min: 0, max: DEBUG_BUNDLE_MAX_AUDIT_LINES },
     includeEnvironment: { kind: "flag" },
   },
+  mindvault_support_bundle: {
+    incidentId: {
+      kind: "string",
+      required: true,
+      maxLength: 64,
+      pattern: /^mv-[0-9a-z]+-[0-9a-z]{4}$/,
+      patternHint: "a correlation ID such as mv-lx3k9a2-4f7q",
+    },
+    maxEntries: { kind: "integer", min: 1, max: 200 },
+  },
   mindvault_set_tags: {
     resourceId: RESOURCE_ID,
     tags: { kind: "tag_array", required: true },

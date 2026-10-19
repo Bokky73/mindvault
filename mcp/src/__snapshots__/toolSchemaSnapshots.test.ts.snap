@@ -4472,6 +4472,45 @@ exports[`tool schema snapshots > mindvault_setup_wallet > output schema 1`] = `
 }
 `;
 
+exports[`tool schema snapshots > mindvault_support_bundle > annotations 1`] = `
+{
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "readOnlyHint": true,
+  "title": "Export Support Bundle",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_support_bundle > input schema 1`] = `
+{
+  "properties": {
+    "incidentId": {
+      "description": "Correlation ID of the incident, as reported by the failing tool call. Example: 'mv-lx3k9a2-4f7q'.",
+      "examples": [
+        "mv-lx3k9a2-4f7q",
+      ],
+      "type": "string",
+    },
+    "maxEntries": {
+      "description": "Maximum audit-log entries to include (1–200, default 100). Newest are kept.",
+      "examples": [
+        50,
+        200,
+      ],
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+    },
+  },
+  "required": [
+    "incidentId",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_support_bundle > output schema 1`] = `null`;
+
 exports[`tool schema snapshots > mindvault_switch_network_profile > annotations 1`] = `
 {
   "destructiveHint": false,
@@ -5367,6 +5406,7 @@ exports[`tool schema snapshots > the covered tool names are pinned 1`] = `
   "mindvault_set_price",
   "mindvault_set_tags",
   "mindvault_setup_wallet",
+  "mindvault_support_bundle",
   "mindvault_switch_network_profile",
   "mindvault_transfer_ownership",
   "mindvault_tx_status",
