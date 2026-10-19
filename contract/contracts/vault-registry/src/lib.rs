@@ -12,6 +12,13 @@
 
 extern crate alloc;
 
+mod anchor_status;
+mod capability_version;
+mod role_events;
+pub use anchor_status::AnchorStatus;
+pub use capability_version::ROLE_CAPABILITY_VERSION;
+pub use role_events::RoleRotation;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     IntoVal, String, Symbol, Val, Vec,
@@ -297,6 +304,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("override_purchase_receipt_anchor", "admin"),
     ("get_purchase_receipt", "—"),
     ("get_anchor_attempts", "—"),
+    ("get_anchor_status", "—"),
     // ── Access leases ─────────────────────────────────────────────────────
     ("buy_lease", "holder"),
     ("renew_lease", "holder"),
@@ -416,10 +424,12 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ),
     ("setterms", "terms_hash: String"),
     ("setregt", "terms_hash: String"),
-    ("setadmin", "new_admin: Address"),
-    ("setrecov", "recovery_admin: Option<Address>"),
-    ("recover", "(old_admin: Address, new_admin: Address)"),
+    ("setadmin", "RoleRotation { actor, previous, replacement }"),
+    ("setrecov", "RoleRotation { actor, previous, replacement }"),
+    ("recover", "RoleRotation { actor, previous, replacement }"),
     ("setptrs", "MetadataPointers { pointers, primary }"),
+    ("nomadmin", "RoleRotation { actor, previous, replacement }"),
+    ("accadmin", "RoleRotation { actor, previous, replacement }"),
     ("nomadmin", "new_admin: Address"),
     ("accadmin", "new_admin: Address"),
     ("nomcancel", "cancelled_nominee: Address"),
@@ -521,6 +531,9 @@ pub struct RegistryInfo {
     /// (`env.ledger().network_id()`), so clients can confirm they are
     /// talking to the network they expect without a hardcoded config value.
     pub network_id: BytesN<32>,
+    /// Role capability version (`ROLE_CAPABILITY_VERSION`): lets clients detect
+    /// which role methods and role-event shapes exist before invoking them.
+    pub role_capability_version: u32,
 }
 
 /// Compact version struct returned by [`VaultRegistry::contract_version`].
@@ -2993,6 +3006,7 @@ impl VaultRegistry {
             version: String::from_str(&env, env!("CARGO_PKG_VERSION")),
             resource_schema_version: RESOURCE_SCHEMA_VERSION,
             network_id: env.ledger().network_id(),
+            role_capability_version: ROLE_CAPABILITY_VERSION,
         }
     }
 
@@ -3050,8 +3064,13 @@ impl VaultRegistry {
             new_admin.require_auth();
             env.storage().instance().set(&DataKey::Admin, &new_admin);
             Self::bump_instance(&env);
-            env.events()
-                .publish((symbol_short!("setadmin"),), new_admin);
+            role_events::publish_rotation(
+                &env,
+                symbol_short!("setadmin"),
+                new_admin.clone(),
+                None,
+                Some(new_admin),
+            );
             return Ok(());
         }
 
@@ -3092,8 +3111,13 @@ impl VaultRegistry {
             .instance()
             .set(&DataKey::PendingAdminExpiry, &expiry);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("nomadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("nomadmin"),
+            stored_admin.clone(),
+            Some(stored_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3147,10 +3171,16 @@ impl VaultRegistry {
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminNominatedAt);
+        let previous_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("accadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("accadmin"),
+            new_admin.clone(),
+            previous_admin,
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3184,14 +3214,26 @@ impl VaultRegistry {
         }
         admin.require_auth();
         recovery_admin.require_auth();
+        let admin_actor = admin.clone();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::RecoveryAdmin, &recovery_admin);
         Self::bump_instance(&env);
-        env.events().publish((symbol_short!("setadmin"),), admin);
-        env.events()
-            .publish((symbol_short!("setrecov"),), Some(recovery_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setadmin"),
+            admin.clone(),
+            None,
+            Some(admin),
+        );
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin_actor,
+            None,
+            Some(recovery_admin),
+        );
         Ok(())
     }
 
@@ -3206,6 +3248,8 @@ impl VaultRegistry {
     pub fn set_recovery_admin(env: Env, recovery_admin: Option<Address>) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        let previous_recovery: Option<Address> =
+            env.storage().instance().get(&DataKey::RecoveryAdmin);
         match &recovery_admin {
             Some(recovery) if *recovery == admin => return Err(Error::SameAdmin),
             Some(recovery) => env
@@ -3215,8 +3259,13 @@ impl VaultRegistry {
             None => env.storage().instance().remove(&DataKey::RecoveryAdmin),
         }
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("setrecov"),), recovery_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin,
+            previous_recovery,
+            recovery_admin,
+        );
         Ok(())
     }
 
@@ -3243,8 +3292,13 @@ impl VaultRegistry {
             .remove(&DataKey::PendingAdminExpiry);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("recover"),), (old_admin, new_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("recover"),
+            recovery,
+            Some(old_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -4213,6 +4267,34 @@ impl VaultRegistry {
         Self::validate_resource_id(&resource_id)?;
         let key = DataKey::AnchorAttempts(resource_id, buyer);
         Ok(Self::anchor_attempts_state(&env, &key))
+    }
+
+    /// Lifecycle status of the anchor for `(resource_id, buyer)`: `None` when
+    /// there has been no anchor activity, otherwise `Pending`, `Confirmed` or
+    /// `Failed` (see the `anchor_status` module for the transitions). Derived
+    /// from existing records, so pre-existing anchors read as `Confirmed`.
+    pub fn get_anchor_status(
+        env: Env,
+        resource_id: String,
+        buyer: Address,
+    ) -> Result<Option<AnchorStatus>, Error> {
+        Self::validate_resource_id(&resource_id)?;
+        let has_anchor = env
+            .storage()
+            .persistent()
+            .has(&DataKey::PurchaseReceipt(resource_id.clone(), buyer.clone()));
+        let has_failure = env
+            .storage()
+            .persistent()
+            .has(&DataKey::AnchorFailure(resource_id.clone(), buyer.clone()));
+        let attempts_key = DataKey::AnchorAttempts(resource_id, buyer);
+        let attempts = Self::anchor_attempts_state(&env, &attempts_key);
+        Ok(anchor_status::derive_status(
+            has_anchor,
+            has_failure,
+            attempts.attempts,
+            MAX_ANCHOR_ATTEMPTS,
+        ))
     }
 
     /// Override a purchase receipt anchor for `(resource_id, buyer)`.
