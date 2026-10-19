@@ -12,6 +12,9 @@
 
 extern crate alloc;
 
+mod role_events;
+pub use role_events::RoleRotation;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     IntoVal, String, Symbol, Val, Vec,
@@ -411,12 +414,12 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ),
     ("setterms", "terms_hash: String"),
     ("setregt", "terms_hash: String"),
-    ("setadmin", "new_admin: Address"),
-    ("setrecov", "recovery_admin: Option<Address>"),
-    ("recover", "(old_admin: Address, new_admin: Address)"),
+    ("setadmin", "RoleRotation { actor, previous, replacement }"),
+    ("setrecov", "RoleRotation { actor, previous, replacement }"),
+    ("recover", "RoleRotation { actor, previous, replacement }"),
     ("setptrs", "MetadataPointers { pointers, primary }"),
-    ("nomadmin", "new_admin: Address"),
-    ("accadmin", "new_admin: Address"),
+    ("nomadmin", "RoleRotation { actor, previous, replacement }"),
+    ("accadmin", "RoleRotation { actor, previous, replacement }"),
     ("netinit", "network_id: BytesN<32>"),
     ("freeze", "()"),
     (
@@ -3011,8 +3014,13 @@ impl VaultRegistry {
             new_admin.require_auth();
             env.storage().instance().set(&DataKey::Admin, &new_admin);
             Self::bump_instance(&env);
-            env.events()
-                .publish((symbol_short!("setadmin"),), new_admin);
+            role_events::publish_rotation(
+                &env,
+                symbol_short!("setadmin"),
+                new_admin.clone(),
+                None,
+                Some(new_admin),
+            );
             return Ok(());
         }
 
@@ -3053,8 +3061,13 @@ impl VaultRegistry {
             .instance()
             .set(&DataKey::PendingAdminExpiry, &expiry);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("nomadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("nomadmin"),
+            stored_admin.clone(),
+            Some(stored_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3108,10 +3121,16 @@ impl VaultRegistry {
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminNominatedAt);
+        let previous_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("accadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("accadmin"),
+            new_admin.clone(),
+            previous_admin,
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3134,14 +3153,26 @@ impl VaultRegistry {
         }
         admin.require_auth();
         recovery_admin.require_auth();
+        let admin_actor = admin.clone();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::RecoveryAdmin, &recovery_admin);
         Self::bump_instance(&env);
-        env.events().publish((symbol_short!("setadmin"),), admin);
-        env.events()
-            .publish((symbol_short!("setrecov"),), Some(recovery_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setadmin"),
+            admin.clone(),
+            None,
+            Some(admin),
+        );
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin_actor,
+            None,
+            Some(recovery_admin),
+        );
         Ok(())
     }
 
@@ -3156,6 +3187,8 @@ impl VaultRegistry {
     pub fn set_recovery_admin(env: Env, recovery_admin: Option<Address>) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        let previous_recovery: Option<Address> =
+            env.storage().instance().get(&DataKey::RecoveryAdmin);
         match &recovery_admin {
             Some(recovery) if *recovery == admin => return Err(Error::SameAdmin),
             Some(recovery) => env
@@ -3165,8 +3198,13 @@ impl VaultRegistry {
             None => env.storage().instance().remove(&DataKey::RecoveryAdmin),
         }
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("setrecov"),), recovery_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin,
+            previous_recovery,
+            recovery_admin,
+        );
         Ok(())
     }
 
@@ -3191,8 +3229,13 @@ impl VaultRegistry {
             .remove(&DataKey::PendingAdminExpiry);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("recover"),), (old_admin, new_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("recover"),
+            recovery,
+            Some(old_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 

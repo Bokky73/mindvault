@@ -11267,6 +11267,7 @@ include!("test/auth_fixtures.rs");
 include!("test/tombstone_read.rs");
 include!("test/creator_listed_count.rs");
 include!("test/memo_hash.rs");
+include!("test/role_events.rs");
 include!("test/flag_details.rs");
 include!("test/payment_idempotency.rs");
 include!("test/stellar_wave_804_805_806_808.rs");
