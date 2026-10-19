@@ -27,6 +27,7 @@ import { PROMPT_DEFINITIONS, getPrompt } from "./prompts.js";
 import { createProgressEmitter, scopeProgressToRequest } from "./progress.js";
 import { truncateResponse } from "./truncation.js";
 import { applyPreviewLimits, serializePreview } from "./previewLimits.js";
+import { resolvePurchaseIdempotencyKey } from "./purchaseIdempotencyKey.js";
 import { createEd25519Signer } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
@@ -73,10 +74,19 @@ import {
   mockSetTags,
 } from "./mock.js";
 import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
+import { lookupPurchaseStatus, trackPurchaseAttempt } from "./purchaseStatusLookup.js";
+import {
+  cancellableSleep,
+  canceledToolResult,
+  isToolCanceled,
+  runCancellable,
+} from "./toolCancellation.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
 import { supportBundleTool } from "./supportBundle.js";
+import { compareCatalogsTool } from "./catalogCompare.js";
+import { applyCatalogCursor, attachNextCatalogCursor, nextCatalogCursor } from "./catalogCursor.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
 import { advertisedTools, hasOutputSchema } from "./toolSurface.js";
@@ -173,6 +183,12 @@ import {
   type TimeoutService,
 } from "./httpTimeout.js";
 import { resolveToolTimeouts, timeoutForTool } from "./toolTimeoutOverrides.js";
+import { assertTimeoutsWithinDeadline, resolveTransportDeadline } from "./timeoutBounds.js";
+import {
+  isAmbiguousOutcome,
+  resolveRegistrationOutcome,
+  uncertainPublishOutcome,
+} from "./publishRetryPolicy.js";
 import {
   describeRetryPolicy,
   formatRetryLog,
@@ -303,6 +319,7 @@ const httpFetch: typeof fetch = MOCK
 
 const TIMEOUTS = resolveTimeouts(process.env);
 const TOOL_TIMEOUTS = resolveToolTimeouts(process.env).overrides;
+assertTimeoutsWithinDeadline(TIMEOUTS, TOOL_TIMEOUTS, resolveTransportDeadline(process.env));
 
 const RETRY_POLICY = retryPolicyFromEnv(process.env);
 
@@ -1861,6 +1878,10 @@ async function browseOutcome(
   filters: CatalogFilters = {},
   bypassCache = false,
 ): Promise<ToolOutcome> {
+async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome> {
+  const resumed = applyCatalogCursor(filters, NETWORK);
+  if (!resumed.ok) return resumed.error;
+  filters = resumed.filters;
   const qs = buildCatalogQueryString(filters);
   const url = qs ? `${BASE_URL}/resources?${qs}` : `${BASE_URL}/resources`;
   let raw: any[] = [];
@@ -1900,7 +1921,10 @@ async function browseOutcome(
         ? `No resources match ${describeCatalogFilters(filters)}.`
         : "No resources listed yet."
       : items.map(formatResource).join("\n\n");
-  return catalogOutcome(items, body, notice);
+  return attachNextCatalogCursor(
+    catalogOutcome(items, body, notice),
+    items.length > 0 ? nextCatalogCursor(filters, raw.length, NETWORK) : null,
+  );
 }
 
 export async function browse(filters: CatalogFilters = {}): Promise<string> {
@@ -2027,7 +2051,7 @@ async function fetchPublishStatusData(resourceId: string): Promise<PublishStatus
 }
 
 function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return cancellableSleep(ms);
 }
 
 export async function publishStatus(
@@ -2160,16 +2184,23 @@ async function publish(args: {
   const snapshot = captureProfileSnapshot();
   const apiKey = snapshot.apiKey ?? requireApiKey();
 
-  const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({
-      title: args.title,
-      description: args.description,
-      price: args.price,
-      externalUrl: args.externalUrl,
-    }),
-  });
+  let createRes: ApiResponse<any>;
+  try {
+    createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({
+        title: args.title,
+        description: args.description,
+        price: args.price,
+        externalUrl: args.externalUrl,
+      }),
+    });
+  } catch (err) {
+    // The server may have created the resource even though the response was lost.
+    if (isAmbiguousOutcome(err)) return uncertainPublishOutcome(args.title, args.externalUrl);
+    throw err;
+  }
   if (!createRes.ok)
     throwHttpError({
       operation: "Publish failed",
@@ -2228,10 +2259,20 @@ async function publish(args: {
       .join("\n");
   }
 
-  const registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-  });
+  let registerRes: ApiResponse<any>;
+  try {
+    registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resource.id, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
 
   const onchainStatus: string = registerRes.ok
     ? (registerRes.data.onchainStatus ?? "registered")
@@ -2305,6 +2346,7 @@ export async function buy(
   wait?: unknown,
   timeoutMs?: unknown,
   intervalMs?: unknown,
+  idempotencyKey?: string,
 ): Promise<string> {
   if (dryRun) {
     const initialDryRun = dryRunBuy(
@@ -2391,7 +2433,18 @@ export async function buy(
   let res: Response;
   try {
     await onProgress?.(2, 4, "Submitting payment");
-    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
+    // Same intent -> same key, so a retry after a lost response is recognised (#73).
+    const purchaseKey = resolvePurchaseIdempotencyKey(
+      {
+        network: snapshot.network,
+        payer: snapshot.wallet.publicKey,
+        resourceId,
+      },
+      idempotencyKey,
+    );
+    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`, {
+      headers: { "Idempotency-Key": purchaseKey },
+    });
   } catch (err) {
     metrics.recordPayment(false);
     throw mcpError(mapTransportError({ operation: "Buy failed", source: "x402", error: err }));
@@ -2548,11 +2601,21 @@ export async function registerOnchain(
   const signedXdr = tx.toXDR();
 
   await onProgress?.(3, 3, "Submitting transaction");
-  const submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({ signedXdr }),
-  });
+  let submit: ApiResponse<any>;
+  try {
+    submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({ signedXdr }),
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resourceId, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
   if (!submit.ok) {
     const txHash =
       submit.data && typeof submit.data === "object"
@@ -4036,15 +4099,22 @@ async function dispatchToolOutcome(
         return publishBatch(typedItems, onProgress);
       }
       case "mindvault_buy":
-        return buy(
+        return trackPurchaseAttempt(
+          activeProfileName,
+          optionalString(dryRunArgs, "idempotencyKey"),
           requiredString(dryRunArgs, "resourceId"),
           flag(dryRunArgs, "dryRun"),
-          undefined,
-          onProgress,
-          optionalString(dryRunArgs, "maxAutoPayUsdc"),
-          args.wait,
-          args.timeoutMs,
-          args.intervalMs,
+          () =>
+            buy(
+              requiredString(dryRunArgs, "resourceId"),
+              flag(dryRunArgs, "dryRun"),
+              undefined,
+              onProgress,
+              optionalString(dryRunArgs, "maxAutoPayUsdc"),
+              args.wait,
+              args.timeoutMs,
+              args.intervalMs,
+            ),
         );
       case "mindvault_buy_lease":
         return buyLease(requiredString(args, "resourceId"), requiredString(args, "tier"), {
@@ -4056,6 +4126,8 @@ async function dispatchToolOutcome(
         return leaseStatus(requiredString(args, "resourceId"), optionalString(args, "holder"));
       case "mindvault_purchase_history":
         return purchaseHistoryTool(rawRecord);
+      case "mindvault_purchase_status":
+        return lookupPurchaseStatus(activeProfileName, requiredString(args, "idempotencyKey"));
       case "mindvault_export_receipts":
         return exportReceiptsToolWithTimeout(
           rawRecord,
@@ -4104,6 +4176,8 @@ async function dispatchToolOutcome(
         );
       case "mindvault_registry_count":
         return registryCount(optionalString(args, "creator"));
+      case "mindvault_compare_catalogs":
+        return compareCatalogsTool(args, jsonFetch);
       case "mindvault_update_metadata":
         return updateMetadata(requiredString(args, "resourceId"), requiredString(args, "metadata"));
       case "mindvault_set_price":
@@ -4235,7 +4309,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       : undefined;
   try {
     const result = await measureTool(metrics, name, () =>
-      dispatchToolOutcome(name, args, progress?.emit),
+      runCancellable(name, extra?.signal, () => dispatchToolOutcome(name, args, progress?.emit)),
     );
     // Opt-in structured telemetry stream (#891): one OTLP line to stderr per
     // tool call when MINDVAULT_METRICS_EXPORT_CONSOLE is set, so a log
@@ -4245,6 +4319,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     }
     return normalizeToolResult(name, result, hasOutputSchema);
   } catch (err: any) {
+    if (isToolCanceled(err)) return canceledToolResult(name);
     const mapped = mappedErrorOf(err);
     return {
       content: [{ type: "text", text: `Error: ${safeErrorMessage(err)}` }],

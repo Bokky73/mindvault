@@ -12,6 +12,13 @@
 
 extern crate alloc;
 
+mod anchor_status;
+mod capability_version;
+mod role_events;
+pub use anchor_status::AnchorStatus;
+pub use capability_version::ROLE_CAPABILITY_VERSION;
+pub use role_events::RoleRotation;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     IntoVal, String, Symbol, Val, Vec,
@@ -182,6 +189,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get", "—"),
     ("get_resource_state", "—"),
     ("get_many", "—"),
+    ("get_resource_states", "—"),
     ("exists", "—"),
     ("exists_many", "—"),
     ("get_owner", "—"),
@@ -208,6 +216,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("remove_verifier", "admin"),
     ("rotate_verifier", "admin"),
     ("is_verifier", "—"),
+    ("list_role_members", "—"),
     ("set_verification_status", "verifier"),
     ("revoke_attestation", "verifier"),
     ("get_attestation_reason_hash", "—"),
@@ -230,6 +239,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
         "current admin (or new_admin for bootstrap)",
     ),
     ("accept_admin", "pending admin"),
+    ("cancel_admin_nomination", "admin"),
     ("bootstrap_dual_admin", "admin + recovery_admin"),
     ("recovery_admin", "—"),
     ("set_recovery_admin", "admin"),
@@ -238,6 +248,8 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("set_paused_until", "admin"),
     ("is_paused", "—"),
     ("pause_until", "—"),
+    ("set_payments_paused", "admin"),
+    ("is_payments_paused", "—"),
     // ── Settler role ──────────────────────────────────────────────────────
     ("add_settler", "admin"),
     ("record_payment_with_memo", "settler + payer"),
@@ -292,6 +304,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("override_purchase_receipt_anchor", "admin"),
     ("get_purchase_receipt", "—"),
     ("get_anchor_attempts", "—"),
+    ("get_anchor_status", "—"),
     // ── Access leases ─────────────────────────────────────────────────────
     ("buy_lease", "holder"),
     ("renew_lease", "holder"),
@@ -411,12 +424,15 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ),
     ("setterms", "terms_hash: String"),
     ("setregt", "terms_hash: String"),
-    ("setadmin", "new_admin: Address"),
-    ("setrecov", "recovery_admin: Option<Address>"),
-    ("recover", "(old_admin: Address, new_admin: Address)"),
+    ("setadmin", "RoleRotation { actor, previous, replacement }"),
+    ("setrecov", "RoleRotation { actor, previous, replacement }"),
+    ("recover", "RoleRotation { actor, previous, replacement }"),
     ("setptrs", "MetadataPointers { pointers, primary }"),
+    ("nomadmin", "RoleRotation { actor, previous, replacement }"),
+    ("accadmin", "RoleRotation { actor, previous, replacement }"),
     ("nomadmin", "new_admin: Address"),
     ("accadmin", "new_admin: Address"),
+    ("nomcancel", "cancelled_nominee: Address"),
     ("netinit", "network_id: BytesN<32>"),
     ("freeze", "()"),
     (
@@ -439,6 +455,7 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("rmsettlr", "RoleChange { admin, target, granted: false }"),
     ("pause", "(paused: bool, admin: Address)"),
     ("pause_until", "(pause_until: u64, admin: Address)"),
+    ("paypause", "(paused: bool, admin: Address)"),
     (
         "anchor",
         "PurchaseReceiptAnchor { resource_id, buyer, receipt_hash, ledger }",
@@ -514,6 +531,9 @@ pub struct RegistryInfo {
     /// (`env.ledger().network_id()`), so clients can confirm they are
     /// talking to the network they expect without a hardcoded config value.
     pub network_id: BytesN<32>,
+    /// Role capability version (`ROLE_CAPABILITY_VERSION`): lets clients detect
+    /// which role methods and role-event shapes exist before invoking them.
+    pub role_capability_version: u32,
 }
 
 /// Compact version struct returned by [`VaultRegistry::contract_version`].
@@ -958,6 +978,21 @@ pub enum DataKey {
     AttestationReasonHash(String),
 }
 
+/// Storage keys for state that does not fit in [`DataKey`].
+///
+/// [`DataKey`] is already at the 50-case limit Soroban allows for a
+/// contract-spec union (`ScSpecUdtUnionV0::cases` in `stellar-xdr` is a
+/// `VecM<_, 50>`), so any new key class must live in a sibling enum rather
+/// than growing `DataKey`.
+#[contracttype]
+#[derive(Clone)]
+pub enum AuxKey {
+    /// Payment-scope emergency pause flag (#62). Value type: `bool`. When
+    /// `true`, every payment, refund, anchor, and lease-write method returns
+    /// `ContractPaused`, while catalog management stays available.
+    PaymentsPaused,
+}
+
 /// Payload of every role grant/revoke event (`addverif`/`rmverif`,
 /// `addsettlr`/`rmsettlr`, `addmod`/`rmmod`). Carries the admin that
 /// authorized the change and the affected address so the event log alone
@@ -1354,6 +1389,13 @@ pub enum Error {
     /// `recover_admin` was called but no recovery admin is configured.
     RecoveryAdminNotSet = 53,
 }
+
+mod admin_nomination_cancel;
+mod batch_state_reads;
+pub use batch_state_reads::MAX_STATE_BATCH;
+mod recovery_target_check;
+mod role_inventory;
+pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
 
 #[contract]
 pub struct VaultRegistry;
@@ -2813,6 +2855,16 @@ impl VaultRegistry {
         Ok(resource.state)
     }
 
+    /// Read the lifecycle state of several resources in one invocation,
+    /// preserving input order. Unknown or malformed ids are `None`. At most
+    /// `MAX_STATE_BATCH` (20) ids; larger batches fail with `BatchTooLarge`.
+    pub fn get_resource_states(
+        env: Env,
+        ids: Vec<String>,
+    ) -> Result<Vec<Option<ResourceState>>, Error> {
+        batch_state_reads::read(&env, &ids)
+    }
+
     /// Read several resources in one invocation, preserving input order.
     /// Missing resources are represented by `None`; valid resources are
     /// returned as `Some(Resource)`. The batch is capped to bound execution
@@ -2954,6 +3006,7 @@ impl VaultRegistry {
             version: String::from_str(&env, env!("CARGO_PKG_VERSION")),
             resource_schema_version: RESOURCE_SCHEMA_VERSION,
             network_id: env.ledger().network_id(),
+            role_capability_version: ROLE_CAPABILITY_VERSION,
         }
     }
 
@@ -3011,8 +3064,13 @@ impl VaultRegistry {
             new_admin.require_auth();
             env.storage().instance().set(&DataKey::Admin, &new_admin);
             Self::bump_instance(&env);
-            env.events()
-                .publish((symbol_short!("setadmin"),), new_admin);
+            role_events::publish_rotation(
+                &env,
+                symbol_short!("setadmin"),
+                new_admin.clone(),
+                None,
+                Some(new_admin),
+            );
             return Ok(());
         }
 
@@ -3053,8 +3111,13 @@ impl VaultRegistry {
             .instance()
             .set(&DataKey::PendingAdminExpiry, &expiry);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("nomadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("nomadmin"),
+            stored_admin.clone(),
+            Some(stored_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3108,10 +3171,27 @@ impl VaultRegistry {
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminNominatedAt);
+        let previous_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("accadmin"),), new_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("accadmin"),
+            new_admin.clone(),
+            previous_admin,
+            Some(new_admin),
+        );
+        Ok(())
+    }
+
+    /// Cancel the pending admin nomination before it is accepted. Only the
+    /// current admin may call this. Errors `AdminNotSet` if no admin exists and
+    /// `PendingAdminNotSet` if there is no nomination to cancel. The cancelled
+    /// nominee can no longer call `accept_admin`. Emits `nomcancel` with the
+    /// cancelled nominee.
+    pub fn cancel_admin_nomination(env: Env) -> Result<(), Error> {
+        admin_nomination_cancel::cancel(&env)?;
+        Self::bump_instance(&env);
         Ok(())
     }
 
@@ -3134,14 +3214,26 @@ impl VaultRegistry {
         }
         admin.require_auth();
         recovery_admin.require_auth();
+        let admin_actor = admin.clone();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::RecoveryAdmin, &recovery_admin);
         Self::bump_instance(&env);
-        env.events().publish((symbol_short!("setadmin"),), admin);
-        env.events()
-            .publish((symbol_short!("setrecov"),), Some(recovery_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setadmin"),
+            admin.clone(),
+            None,
+            Some(admin),
+        );
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin_actor,
+            None,
+            Some(recovery_admin),
+        );
         Ok(())
     }
 
@@ -3156,6 +3248,8 @@ impl VaultRegistry {
     pub fn set_recovery_admin(env: Env, recovery_admin: Option<Address>) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        let previous_recovery: Option<Address> =
+            env.storage().instance().get(&DataKey::RecoveryAdmin);
         match &recovery_admin {
             Some(recovery) if *recovery == admin => return Err(Error::SameAdmin),
             Some(recovery) => env
@@ -3165,15 +3259,21 @@ impl VaultRegistry {
             None => env.storage().instance().remove(&DataKey::RecoveryAdmin),
         }
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("setrecov"),), recovery_admin);
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("setrecov"),
+            admin,
+            previous_recovery,
+            recovery_admin,
+        );
         Ok(())
     }
 
     /// Replace a lost admin key. Only the recovery admin may call this.
     /// Sets `new_admin` as admin immediately and clears any pending admin
     /// nomination. The recovery admin itself is unchanged. Errors
-    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin`. Emits `recover`.
+    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin` (target is the current
+    /// admin, the recovery admin, or a live pending admin). Emits `recover`.
     pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let recovery: Address = env
             .storage()
@@ -3185,14 +3285,20 @@ impl VaultRegistry {
         if new_admin == old_admin || new_admin == recovery {
             return Err(Error::SameAdmin);
         }
+        recovery_target_check::ensure_valid_recovery_target(&env, &new_admin, &old_admin, &recovery)?;
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminExpiry);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("recover"),), (old_admin, new_admin));
+        role_events::publish_rotation(
+            &env,
+            symbol_short!("recover"),
+            recovery,
+            Some(old_admin),
+            Some(new_admin),
+        );
         Ok(())
     }
 
@@ -3268,12 +3374,36 @@ impl VaultRegistry {
         pause_until
     }
 
+    /// Set or clear the payment-scope emergency pause (#62).
+    ///
+    /// When `paused` is `true` every payment, refund, anchor, and lease-write
+    /// method returns [`Error::ContractPaused`] without modifying any state,
+    /// while catalog management remains available. This scope is independent
+    /// of the global pause.
+    pub fn set_payments_paused(env: Env, admin: Address, paused: bool) -> Result<(), Error> {
+        Self::require_current_admin(&env, &admin)?;
+        env.storage()
+            .instance()
+            .set(&AuxKey::PaymentsPaused, &paused);
+        Self::bump_instance(&env);
+        env.events()
+            .publish((symbol_short!("paypause"), admin.clone()), (paused, admin));
+        Ok(())
+    }
+
+    /// Whether the payment scope is currently paused (#62). Returns `false`
+    /// when the flag has never been set.
+    pub fn is_payments_paused(env: Env) -> bool {
+        Self::payments_pause_is_active(&env)
+    }
+
     /// Grant the verifier role to `verifier`, authorizing `set_verification_status`.
     /// Only the admin may call this. Errors `AdminNotSet` if no admin has
     /// been set yet (see `nominate_new_admin`).
     pub fn add_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Verifier, &verifier)?;
         Self::add_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3282,6 +3412,7 @@ impl VaultRegistry {
     pub fn remove_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &verifier);
         Self::remove_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3304,6 +3435,8 @@ impl VaultRegistry {
             return Err(Error::AlreadyRegistered);
         }
 
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &old_verifier);
+        role_inventory::track_grant(&env, RoleKind::Verifier, &new_verifier)?;
         Self::remove_verifier_internal(&env, &admin, old_verifier.clone());
         Self::add_verifier_internal(&env, &admin, new_verifier.clone());
         env.events().publish(
@@ -3315,6 +3448,15 @@ impl VaultRegistry {
             },
         );
         Ok(())
+    }
+
+    /// Page through the addresses holding `role` (admin, verifier, moderator
+    /// or settler), in grant order. Read-only. `limit` is capped at
+    /// `ROLE_PAGE_CAP` (20) and each non-admin role tracks at most
+    /// `MAX_ROLE_MEMBERS` (50) addresses; `next_cursor` is `None` at the end.
+    /// See `docs/role-inventory.md`.
+    pub fn list_role_members(env: Env, role: RoleKind, cursor: u32, limit: u32) -> RolePage {
+        role_inventory::page(&env, role, cursor, limit)
     }
 
     /// Whether `address` currently holds the verifier role.
@@ -3594,6 +3736,7 @@ impl VaultRegistry {
     pub fn add_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Settler, &settler)?;
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &true);
@@ -3613,6 +3756,7 @@ impl VaultRegistry {
     pub fn remove_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Settler, &settler);
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &false);
@@ -3771,6 +3915,7 @@ impl VaultRegistry {
         }
 
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_receipt_id(&receipt_id)?;
 
         let receipt_key = DataKey::PaymentReceipt(receipt_id.clone());
@@ -4008,6 +4153,7 @@ impl VaultRegistry {
     ) -> Result<(), Error> {
         Self::require_anchor_authority(&env, &service)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         if let Some(reason) = Self::anchor_blocker(&env, &resource_id, &buyer, &receipt_hash) {
             return Err(reason.as_error());
@@ -4051,6 +4197,7 @@ impl VaultRegistry {
     ) -> Result<bool, Error> {
         Self::require_anchor_authority(&env, &service)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let attempts_key = DataKey::AnchorAttempts(resource_id.clone(), buyer.clone());
@@ -4122,6 +4269,34 @@ impl VaultRegistry {
         Ok(Self::anchor_attempts_state(&env, &key))
     }
 
+    /// Lifecycle status of the anchor for `(resource_id, buyer)`: `None` when
+    /// there has been no anchor activity, otherwise `Pending`, `Confirmed` or
+    /// `Failed` (see the `anchor_status` module for the transitions). Derived
+    /// from existing records, so pre-existing anchors read as `Confirmed`.
+    pub fn get_anchor_status(
+        env: Env,
+        resource_id: String,
+        buyer: Address,
+    ) -> Result<Option<AnchorStatus>, Error> {
+        Self::validate_resource_id(&resource_id)?;
+        let has_anchor = env
+            .storage()
+            .persistent()
+            .has(&DataKey::PurchaseReceipt(resource_id.clone(), buyer.clone()));
+        let has_failure = env
+            .storage()
+            .persistent()
+            .has(&DataKey::AnchorFailure(resource_id.clone(), buyer.clone()));
+        let attempts_key = DataKey::AnchorAttempts(resource_id, buyer);
+        let attempts = Self::anchor_attempts_state(&env, &attempts_key);
+        Ok(anchor_status::derive_status(
+            has_anchor,
+            has_failure,
+            attempts.attempts,
+            MAX_ANCHOR_ATTEMPTS,
+        ))
+    }
+
     /// Override a purchase receipt anchor for `(resource_id, buyer)`.
     ///
     /// This method allows the admin to forcibly update an existing purchase receipt
@@ -4135,6 +4310,7 @@ impl VaultRegistry {
     ) -> Result<(), Error> {
         Self::require_current_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let key = DataKey::PurchaseReceipt(resource_id.clone(), buyer.clone());
@@ -4192,6 +4368,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         let failure_key = DataKey::AnchorFailure(resource_id.clone(), buyer.clone());
@@ -4278,6 +4455,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
 
         // Resolve the payment this anchor must correspond to.
@@ -4384,6 +4562,7 @@ impl VaultRegistry {
     pub fn add_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Moderator, &moderator)?;
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &true);
@@ -4403,6 +4582,7 @@ impl VaultRegistry {
     pub fn remove_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Moderator, &moderator);
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &false);
@@ -4639,6 +4819,7 @@ impl VaultRegistry {
     ) -> Result<Lease, Error> {
         holder.require_auth();
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(&tx_hash)?;
@@ -4719,6 +4900,7 @@ impl VaultRegistry {
             return Err(Error::NotSettler);
         }
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         let key = DataKey::Lease(resource_id.clone(), holder);
         let mut lease: Lease = env
@@ -5044,6 +5226,7 @@ impl VaultRegistry {
         admin_override: bool,
     ) -> Result<(), Error> {
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_receipt_id(&refund_id)?;
         Self::validate_receipt_id(&payment_receipt_id)?;
         Self::validate_payment_amount(amount)?;
@@ -5208,6 +5391,7 @@ impl VaultRegistry {
         Self::validate_receipt_id(receipt_id)?;
         payer.require_auth();
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_resource_id(resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(tx_hash)
@@ -5977,6 +6161,7 @@ impl VaultRegistry {
         state: LeaseState,
     ) -> Result<Lease, Error> {
         Self::require_not_paused(env)?;
+        Self::require_not_payments_paused(env)?;
         Self::validate_resource_id(&resource_id)?;
         Self::validate_payment_amount(amount)?;
         Self::validate_tx_hash(&tx_hash)?;
@@ -6091,6 +6276,26 @@ impl VaultRegistry {
         // Bump TTL on read to keep pause entries alive for active monitors
         Self::bump_instance(env);
         result
+    }
+
+    /// Return `ContractPaused` if the payment-scope pause flag is set (#62).
+    fn require_not_payments_paused(env: &Env) -> Result<(), Error> {
+        if Self::payments_pause_is_active(env) {
+            Err(Error::ContractPaused)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return whether the payment-scope pause is active.
+    fn payments_pause_is_active(env: &Env) -> bool {
+        let paused = env
+            .storage()
+            .instance()
+            .get::<AuxKey, bool>(&AuxKey::PaymentsPaused)
+            .unwrap_or(false);
+        Self::bump_instance(env);
+        paused
     }
 
     /// Normalize a tag for storage and index keying: trim ASCII whitespace and

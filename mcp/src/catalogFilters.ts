@@ -28,6 +28,8 @@ export interface CatalogFilters {
   tags?: string[];
   /** Listing state; matched client-side when present on results. */
   listed?: boolean;
+  /** Opaque resume token from a previous browse page (see catalogCursor.ts). */
+  cursor?: string;
 }
 
 export type ParseCatalogFiltersResult =
@@ -195,6 +197,9 @@ export function parseCatalogFilters(
     offset,
     tags,
     listed,
+    ...(typeof raw.cursor === "string" && raw.cursor.trim()
+      ? { cursor: raw.cursor.trim() }
+      : {}),
   };
 
   if (options.requireCriteria) {

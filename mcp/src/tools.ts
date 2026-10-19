@@ -16,6 +16,13 @@
 
 import { catalogFilterInputProperties } from "./catalogFilters.js";
 import { bypassCacheInputProperty } from "./catalogCacheBypass.js";
+import { CATALOG_CURSOR_INPUT_PROPERTY } from "./catalogCursor.js";
+import {
+  COMPARE_CATALOGS_OUTPUT_SCHEMA,
+  COMPARE_DEFAULT_LIMIT,
+  COMPARE_MAX_LIMIT,
+  COMPARE_NETWORKS,
+} from "./catalogCompare.js";
 import {
   AGENT_STATUS_OUTPUT_SCHEMA,
   ATTESTATION_VERIFICATION_OUTPUT_SCHEMA,
@@ -51,6 +58,7 @@ import {
   WALLET_INFO_OUTPUT_SCHEMA,
   WALLET_SETUP_OUTPUT_SCHEMA,
 } from "./outputSchemas.js";
+import { PURCHASE_STATUS_OUTPUT_SCHEMA } from "./purchaseStatusLookup.js";
 import { RECEIPT_EXPORT_MAX_LIMIT, RECEIPT_EXPORT_OUTPUT_SCHEMA } from "./receipts.js";
 import {
   DEBUG_BUNDLE_DEFAULT_AUDIT_LINES,
@@ -249,6 +257,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: { ...catalogFilterInputProperties, ...bypassCacheInputProperty },
+      properties: {
+        ...catalogFilterInputProperties,
+        cursor: CATALOG_CURSOR_INPUT_PROPERTY,
+      },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -296,6 +308,43 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: PREVIEW_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Preview Resource",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "mindvault_compare_catalogs",
+    description:
+      "Compare the catalogs of two explicitly named network profiles (testnet and mainnet), read-only. Reports resources present on only one side and field-level differences (title, description, price, type, verification status, tags) for ids present on both, after normalizing price formatting, whitespace and tag order. Output identifies each side's network, API URL, and registry contract id. Performs GET reads only; no wallet is needed and nothing is written.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        left: {
+          type: "string",
+          enum: [...COMPARE_NETWORKS],
+          description: "First profile to compare: testnet or mainnet.",
+          examples: ["testnet"],
+        },
+        right: {
+          type: "string",
+          enum: [...COMPARE_NETWORKS],
+          description: "Second profile to compare; must differ from left.",
+          examples: ["mainnet"],
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: COMPARE_MAX_LIMIT,
+          description: `Max resources read from each profile (1-${COMPARE_MAX_LIMIT}, default ${COMPARE_DEFAULT_LIMIT}).`,
+          examples: [50],
+        },
+      },
+      required: ["left", "right"],
+    },
+    outputSchema: COMPARE_CATALOGS_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
+    annotations: {
+      title: "Compare Catalogs",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
@@ -445,6 +494,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             "Optional interval in milliseconds between settlement status polls when wait is true. Default 2000, minimum 200.",
           default: 2000,
           examples: [500, 2000],
+        },
+        idempotencyKey: {
+          type: "string",
+          description:
+            "Optional client-chosen key (letters, digits, dot, dash, underscore, colon; max 128). When set, the attempt is recorded so mindvault_purchase_status can resolve it if the response is lost. A key that already settled is not paid again.",
+          examples: ["buy-cm7x8y9z-2026-01-01"],
         },
       },
       required: ["resourceId"],
@@ -1686,6 +1741,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: PURCHASE_HISTORY_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Purchase History",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "mindvault_purchase_status",
+    description:
+      "Resolve a mindvault_buy attempt by its client idempotencyKey when the tool response never reached you. Read-only and scoped to the active wallet profile: another profile's key reads as unknown. Returns state unknown (no attempt recorded), pending (started, outcome not recorded), settled (with txHash and receiptRef) or failed (no payment was made).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        idempotencyKey: {
+          type: "string",
+          description: "The idempotencyKey that was passed to mindvault_buy.",
+          examples: ["buy-cm7x8y9z-2026-01-01"],
+        },
+      },
+      required: ["idempotencyKey"],
+    },
+    outputSchema: PURCHASE_STATUS_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
+    annotations: {
+      title: "Purchase Status",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
