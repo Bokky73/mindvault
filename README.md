@@ -264,3 +264,16 @@ MIT
 
 <!-- handsoff-issue-14 -->
 - #14: [Contract] [Feature] Add batch metadata-pointer updates with per-item results
+<!-- handsoff-issue-7 -->
+- #7: [MCP] [Bug] state backup restore accepts a file that belongs to another network profile
+
+<!-- handsoff-issue-8 -->
+- #8: [Contract] [Feature] Add versioned resource migrations with explicit upgrade guards
+
+<!-- handsoff-issue-9 -->
+- #9: [Contract] [Bug] Prevent stale creator indexes after repeated ownership transfers
+<!-- handsoff-issue-15 -->
+- #15: [Contract] [Bug] Ensure metadata freeze cannot be bypassed through batch setters
+
+<!-- handsoff-issue-18 -->
+- #18: [Contract] [Feature] Add creator-scoped listing page with listed and lifecycle filters
