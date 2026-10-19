@@ -187,6 +187,14 @@ exports[`tool schema snapshots > mindvault_browse > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_browse > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
+    },
     "limit": {
       "description": "Max number of resources to return (1–100, server default 20).",
       "examples": [
@@ -2160,6 +2168,14 @@ exports[`tool schema snapshots > mindvault_preview > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_preview > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
+    },
     "resourceId": {
       "description": "The unique resource identifier from mindvault_browse or mindvault_search. Example: 'cm7x8y9z'",
       "examples": [
@@ -3773,6 +3789,14 @@ exports[`tool schema snapshots > mindvault_search > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_search > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
+    },
     "limit": {
       "description": "Max number of resources to return (1–100, server default 20).",
       "examples": [

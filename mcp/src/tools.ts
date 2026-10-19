@@ -15,6 +15,7 @@
  */
 
 import { catalogFilterInputProperties } from "./catalogFilters.js";
+import { bypassCacheInputProperty } from "./catalogCacheBypass.js";
 import {
   AGENT_STATUS_OUTPUT_SCHEMA,
   ATTESTATION_VERIFICATION_OUTPUT_SCHEMA,
@@ -247,7 +248,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "List resources in the MindVault catalog with the same optional filters as mindvault_search and GET /resources: keyword, price range, verification status, resource type, owner, sort, pagination, tags, and listed state. Sort accepts newest, price_asc, price_desc, or title; results are ordered client-side too, so the order holds even when the backend ignores the parameter.",
     inputSchema: {
       type: "object",
-      properties: { ...catalogFilterInputProperties },
+      properties: { ...catalogFilterInputProperties, ...bypassCacheInputProperty },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -264,7 +265,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Search the MindVault catalog by keyword and optional filters for price, resource type, verification status, owner, sort, pagination, tags, and listed state. Uses server-side filtering where supported and returns compact resource summaries.",
     inputSchema: {
       type: "object",
-      properties: { ...catalogFilterInputProperties },
+      properties: { ...catalogFilterInputProperties, ...bypassCacheInputProperty },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -288,6 +289,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             "The unique resource identifier from mindvault_browse or mindvault_search. Example: 'cm7x8y9z'",
           examples: ["cm7x8y9z", "res-001", "ckx9j2h3f"],
         },
+        ...bypassCacheInputProperty,
       },
       required: ["resourceId"],
     },
