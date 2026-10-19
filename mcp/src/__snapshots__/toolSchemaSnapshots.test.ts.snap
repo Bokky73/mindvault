@@ -403,6 +403,13 @@ exports[`tool schema snapshots > mindvault_buy > input schema 1`] = `
       "description": "Optional dry-run flag. When true, validates the resource ID and shows intended network, endpoint, and required wallet state without submitting payment.",
       "type": "boolean",
     },
+    "idempotencyKey": {
+      "description": "Optional client-chosen key (letters, digits, dot, dash, underscore, colon; max 128). When set, the attempt is recorded so mindvault_purchase_status can resolve it if the response is lost. A key that already settled is not paid again.",
+      "examples": [
+        "buy-cm7x8y9z-2026-01-01",
+      ],
+      "type": "string",
+    },
     "intervalMs": {
       "default": 2000,
       "description": "Optional interval in milliseconds between settlement status polls when wait is true. Default 2000, minimum 200.",
@@ -2947,6 +2954,94 @@ exports[`tool schema snapshots > mindvault_purchase_history > output schema 1`] 
 }
 `;
 
+exports[`tool schema snapshots > mindvault_purchase_status > annotations 1`] = `
+{
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "readOnlyHint": true,
+  "title": "Purchase Status",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_purchase_status > input schema 1`] = `
+{
+  "properties": {
+    "idempotencyKey": {
+      "description": "The idempotencyKey that was passed to mindvault_buy.",
+      "examples": [
+        "buy-cm7x8y9z-2026-01-01",
+      ],
+      "type": "string",
+    },
+  },
+  "required": [
+    "idempotencyKey",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_purchase_status > output schema 1`] = `
+{
+  "properties": {
+    "idempotencyKey": {
+      "type": "string",
+    },
+    "message": {
+      "type": "string",
+    },
+    "next": {
+      "type": "string",
+    },
+    "receiptRef": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+    "resourceId": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+    "startedAt": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+    "state": {
+      "enum": [
+        "unknown",
+        "pending",
+        "settled",
+        "failed",
+      ],
+      "type": "string",
+    },
+    "txHash": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+    "updatedAt": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "idempotencyKey",
+    "state",
+    "message",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`tool schema snapshots > mindvault_recover_catalog_cache > annotations 1`] = `
 {
   "destructiveHint": false,
@@ -5322,6 +5417,7 @@ exports[`tool schema snapshots > the covered tool names are pinned 1`] = `
   "mindvault_publish_status",
   "mindvault_publish_template",
   "mindvault_purchase_history",
+  "mindvault_purchase_status",
   "mindvault_recover_catalog_cache",
   "mindvault_register",
   "mindvault_register_onchain",

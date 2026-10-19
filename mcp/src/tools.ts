@@ -50,6 +50,7 @@ import {
   WALLET_INFO_OUTPUT_SCHEMA,
   WALLET_SETUP_OUTPUT_SCHEMA,
 } from "./outputSchemas.js";
+import { PURCHASE_STATUS_OUTPUT_SCHEMA } from "./purchaseStatusLookup.js";
 import { RECEIPT_EXPORT_MAX_LIMIT, RECEIPT_EXPORT_OUTPUT_SCHEMA } from "./receipts.js";
 import {
   DEBUG_BUNDLE_DEFAULT_AUDIT_LINES,
@@ -443,6 +444,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             "Optional interval in milliseconds between settlement status polls when wait is true. Default 2000, minimum 200.",
           default: 2000,
           examples: [500, 2000],
+        },
+        idempotencyKey: {
+          type: "string",
+          description:
+            "Optional client-chosen key (letters, digits, dot, dash, underscore, colon; max 128). When set, the attempt is recorded so mindvault_purchase_status can resolve it if the response is lost. A key that already settled is not paid again.",
+          examples: ["buy-cm7x8y9z-2026-01-01"],
         },
       },
       required: ["resourceId"],
@@ -1654,6 +1661,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: PURCHASE_HISTORY_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Purchase History",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "mindvault_purchase_status",
+    description:
+      "Resolve a mindvault_buy attempt by its client idempotencyKey when the tool response never reached you. Read-only and scoped to the active wallet profile: another profile's key reads as unknown. Returns state unknown (no attempt recorded), pending (started, outcome not recorded), settled (with txHash and receiptRef) or failed (no payment was made).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        idempotencyKey: {
+          type: "string",
+          description: "The idempotencyKey that was passed to mindvault_buy.",
+          examples: ["buy-cm7x8y9z-2026-01-01"],
+        },
+      },
+      required: ["idempotencyKey"],
+    },
+    outputSchema: PURCHASE_STATUS_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
+    annotations: {
+      title: "Purchase Status",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,

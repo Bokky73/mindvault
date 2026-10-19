@@ -73,6 +73,7 @@ import {
   mockSetTags,
 } from "./mock.js";
 import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
+import { lookupPurchaseStatus, trackPurchaseAttempt } from "./purchaseStatusLookup.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
@@ -4046,15 +4047,22 @@ async function dispatchToolOutcome(
         return publishBatch(typedItems, onProgress);
       }
       case "mindvault_buy":
-        return buy(
+        return trackPurchaseAttempt(
+          activeProfileName,
+          optionalString(dryRunArgs, "idempotencyKey"),
           requiredString(dryRunArgs, "resourceId"),
           flag(dryRunArgs, "dryRun"),
-          undefined,
-          onProgress,
-          optionalString(dryRunArgs, "maxAutoPayUsdc"),
-          args.wait,
-          args.timeoutMs,
-          args.intervalMs,
+          () =>
+            buy(
+              requiredString(dryRunArgs, "resourceId"),
+              flag(dryRunArgs, "dryRun"),
+              undefined,
+              onProgress,
+              optionalString(dryRunArgs, "maxAutoPayUsdc"),
+              args.wait,
+              args.timeoutMs,
+              args.intervalMs,
+            ),
         );
       case "mindvault_buy_lease":
         return buyLease(requiredString(args, "resourceId"), requiredString(args, "tier"), {
@@ -4066,6 +4074,8 @@ async function dispatchToolOutcome(
         return leaseStatus(requiredString(args, "resourceId"), optionalString(args, "holder"));
       case "mindvault_purchase_history":
         return purchaseHistoryTool(rawRecord);
+      case "mindvault_purchase_status":
+        return lookupPurchaseStatus(activeProfileName, requiredString(args, "idempotencyKey"));
       case "mindvault_export_receipts":
         return exportReceiptsToolWithTimeout(
           rawRecord,
