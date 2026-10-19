@@ -174,6 +174,11 @@ import {
 import { resolveToolTimeouts, timeoutForTool } from "./toolTimeoutOverrides.js";
 import { assertTimeoutsWithinDeadline, resolveTransportDeadline } from "./timeoutBounds.js";
 import {
+  isAmbiguousOutcome,
+  resolveRegistrationOutcome,
+  uncertainPublishOutcome,
+} from "./publishRetryPolicy.js";
+import {
   describeRetryPolicy,
   formatRetryLog,
   isIdempotentMethod,
@@ -2138,16 +2143,23 @@ async function publish(args: {
   const snapshot = captureProfileSnapshot();
   const apiKey = snapshot.apiKey ?? requireApiKey();
 
-  const createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({
-      title: args.title,
-      description: args.description,
-      price: args.price,
-      externalUrl: args.externalUrl,
-    }),
-  });
+  let createRes: ApiResponse<any>;
+  try {
+    createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({
+        title: args.title,
+        description: args.description,
+        price: args.price,
+        externalUrl: args.externalUrl,
+      }),
+    });
+  } catch (err) {
+    // The server may have created the resource even though the response was lost.
+    if (isAmbiguousOutcome(err)) return uncertainPublishOutcome(args.title, args.externalUrl);
+    throw err;
+  }
   if (!createRes.ok)
     throwHttpError({
       operation: "Publish failed",
@@ -2206,10 +2218,20 @@ async function publish(args: {
       .join("\n");
   }
 
-  const registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-  });
+  let registerRes: ApiResponse<any>;
+  try {
+    registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resource.id, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
 
   const onchainStatus: string = registerRes.ok
     ? (registerRes.data.onchainStatus ?? "registered")
@@ -2526,11 +2548,21 @@ export async function registerOnchain(
   const signedXdr = tx.toXDR();
 
   await onProgress?.(3, 3, "Submitting transaction");
-  const submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    body: JSON.stringify({ signedXdr }),
-  });
+  let submit: ApiResponse<any>;
+  try {
+    submit = await jsonFetch(`${BASE_URL}/resources/${resourceId}/register`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      body: JSON.stringify({ signedXdr }),
+    });
+  } catch (err) {
+    if (isAmbiguousOutcome(err)) {
+      return resolveRegistrationOutcome(resourceId, (id) =>
+        jsonFetch(`${BASE_URL}/resources/${id}`),
+      );
+    }
+    throw err;
+  }
   if (!submit.ok) {
     const txHash =
       submit.data && typeof submit.data === "object"
