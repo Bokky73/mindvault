@@ -27,6 +27,7 @@ import { PROMPT_DEFINITIONS, getPrompt } from "./prompts.js";
 import { createProgressEmitter, scopeProgressToRequest } from "./progress.js";
 import { truncateResponse } from "./truncation.js";
 import { applyPreviewLimits, serializePreview } from "./previewLimits.js";
+import { resolvePurchaseIdempotencyKey } from "./purchaseIdempotencyKey.js";
 import { createEd25519Signer } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
@@ -2281,6 +2282,7 @@ export async function buy(
   wait?: unknown,
   timeoutMs?: unknown,
   intervalMs?: unknown,
+  idempotencyKey?: string,
 ): Promise<string> {
   if (dryRun) {
     const initialDryRun = dryRunBuy(
@@ -2367,7 +2369,18 @@ export async function buy(
   let res: Response;
   try {
     await onProgress?.(2, 4, "Submitting payment");
-    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`);
+    // Same intent -> same key, so a retry after a lost response is recognised (#73).
+    const purchaseKey = resolvePurchaseIdempotencyKey(
+      {
+        network: snapshot.network,
+        payer: snapshot.wallet.publicKey,
+        resourceId,
+      },
+      idempotencyKey,
+    );
+    res = await paidFetch(`${snapshot.baseUrl}/resources/${resourceId}`, {
+      headers: { "Idempotency-Key": purchaseKey },
+    });
   } catch (err) {
     metrics.recordPayment(false);
     throw mcpError(mapTransportError({ operation: "Buy failed", source: "x402", error: err }));
