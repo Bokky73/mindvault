@@ -230,6 +230,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
         "current admin (or new_admin for bootstrap)",
     ),
     ("accept_admin", "pending admin"),
+    ("cancel_admin_nomination", "admin"),
     ("bootstrap_dual_admin", "admin + recovery_admin"),
     ("recovery_admin", "—"),
     ("set_recovery_admin", "admin"),
@@ -417,6 +418,7 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("setptrs", "MetadataPointers { pointers, primary }"),
     ("nomadmin", "new_admin: Address"),
     ("accadmin", "new_admin: Address"),
+    ("nomcancel", "cancelled_nominee: Address"),
     ("netinit", "network_id: BytesN<32>"),
     ("freeze", "()"),
     (
@@ -1355,6 +1357,7 @@ pub enum Error {
     RecoveryAdminNotSet = 53,
 }
 
+mod admin_nomination_cancel;
 mod recovery_target_check;
 
 #[contract]
@@ -3114,6 +3117,17 @@ impl VaultRegistry {
         Self::bump_instance(&env);
         env.events()
             .publish((symbol_short!("accadmin"),), new_admin);
+        Ok(())
+    }
+
+    /// Cancel the pending admin nomination before it is accepted. Only the
+    /// current admin may call this. Errors `AdminNotSet` if no admin exists and
+    /// `PendingAdminNotSet` if there is no nomination to cancel. The cancelled
+    /// nominee can no longer call `accept_admin`. Emits `nomcancel` with the
+    /// cancelled nominee.
+    pub fn cancel_admin_nomination(env: Env) -> Result<(), Error> {
+        admin_nomination_cancel::cancel(&env)?;
+        Self::bump_instance(&env);
         Ok(())
     }
 
