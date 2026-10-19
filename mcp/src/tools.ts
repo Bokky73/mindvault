@@ -96,7 +96,7 @@ export interface ToolAnnotations {
   title: string;
   /** The tool performs no state changes or side effects. */
   readOnlyHint: boolean;
-  /** The tool can irreversibly destroy local state. */
+  /** The tool may perform destructive updates. */
   destructiveHint: boolean;
   /** Repeating the tool with identical arguments is safe and yields the same result. */
   idempotentHint: boolean;
@@ -266,7 +266,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Browse Catalog",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
     },
@@ -283,7 +283,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Search Catalog",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
     },
@@ -995,9 +995,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     annotations: {
       title: "Back Up State",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: true,
+      idempotentHint: false,
     },
   },
   {
@@ -1090,7 +1090,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       title: "Tool Metrics",
       readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: true,
+      idempotentHint: false,
     },
   },
   {
@@ -1471,7 +1471,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: { type: "object", properties: {}, required: [] },
     annotations: {
       title: "Pre-warm Catalog Cache",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
     },
