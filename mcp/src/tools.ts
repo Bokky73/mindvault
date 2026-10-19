@@ -15,6 +15,7 @@
  */
 
 import { catalogFilterInputProperties } from "./catalogFilters.js";
+import { bypassCacheInputProperty } from "./catalogCacheBypass.js";
 import { CATALOG_CURSOR_INPUT_PROPERTY } from "./catalogCursor.js";
 import {
   COMPARE_CATALOGS_OUTPUT_SCHEMA,
@@ -255,6 +256,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "List resources in the MindVault catalog with the same optional filters as mindvault_search and GET /resources: keyword, price range, verification status, resource type, owner, sort, pagination, tags, and listed state. Sort accepts newest, price_asc, price_desc, or title; results are ordered client-side too, so the order holds even when the backend ignores the parameter.",
     inputSchema: {
       type: "object",
+      properties: { ...catalogFilterInputProperties, ...bypassCacheInputProperty },
       properties: {
         ...catalogFilterInputProperties,
         cursor: CATALOG_CURSOR_INPUT_PROPERTY,
@@ -275,7 +277,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Search the MindVault catalog by keyword and optional filters for price, resource type, verification status, owner, sort, pagination, tags, and listed state. Uses server-side filtering where supported and returns compact resource summaries.",
     inputSchema: {
       type: "object",
-      properties: { ...catalogFilterInputProperties },
+      properties: { ...catalogFilterInputProperties, ...bypassCacheInputProperty },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -299,6 +301,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             "The unique resource identifier from mindvault_browse or mindvault_search. Example: 'cm7x8y9z'",
           examples: ["cm7x8y9z", "res-001", "ckx9j2h3f"],
         },
+        ...bypassCacheInputProperty,
       },
       required: ["resourceId"],
     },
@@ -1615,6 +1618,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: DEBUG_BUNDLE_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Export Debug Bundle",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "mindvault_support_bundle",
+    description:
+      "Export a redacted support bundle for one incident, identified by the correlation ID a failed tool call reported (mv-...). Includes only the audit-log entries for that incident, the tools they name and their metrics, the active profile's address, and the resolved network settings. Bounded and deterministic; wallet secrets, API keys, tokens and other profiles are never included. Local and read-only, no network calls.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        incidentId: {
+          type: "string",
+          description:
+            "Correlation ID of the incident, as reported by the failing tool call. Example: 'mv-lx3k9a2-4f7q'.",
+          examples: ["mv-lx3k9a2-4f7q"],
+        },
+        maxEntries: {
+          type: "integer",
+          minimum: 1,
+          maximum: 200,
+          description: "Maximum audit-log entries to include (1–200, default 100). Newest are kept.",
+          examples: [50, 200],
+        },
+      },
+      required: ["incidentId"],
+    },
+    annotations: {
+      title: "Export Support Bundle",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,

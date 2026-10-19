@@ -265,6 +265,9 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
     network: { kind: "enum", values: ["testnet", "mainnet"], required: true },
   },
   mindvault_list_profiles: {},
+  mindvault_browse: { ...CATALOG_FILTER_ARGS, bypassCache: { kind: "flag" } },
+  mindvault_search: { ...CATALOG_FILTER_ARGS, bypassCache: { kind: "flag" } },
+  mindvault_preview: { resourceId: RESOURCE_ID, bypassCache: { kind: "flag" } },
   mindvault_browse: { ...CATALOG_FILTER_ARGS, cursor: { kind: "string", maxLength: 512 } },
   mindvault_search: { ...CATALOG_FILTER_ARGS },
   mindvault_preview: { resourceId: RESOURCE_ID },
@@ -395,6 +398,16 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
   mindvault_debug_bundle: {
     auditLogLines: { kind: "integer", min: 0, max: DEBUG_BUNDLE_MAX_AUDIT_LINES },
     includeEnvironment: { kind: "flag" },
+  },
+  mindvault_support_bundle: {
+    incidentId: {
+      kind: "string",
+      required: true,
+      maxLength: 64,
+      pattern: /^mv-[0-9a-z]+-[0-9a-z]{4}$/,
+      patternHint: "a correlation ID such as mv-lx3k9a2-4f7q",
+    },
+    maxEntries: { kind: "integer", min: 1, max: 200 },
   },
   mindvault_set_tags: {
     resourceId: RESOURCE_ID,

@@ -187,6 +187,13 @@ exports[`tool schema snapshots > mindvault_browse > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_browse > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
     "cursor": {
       "description": "Opaque cursor returned as nextCursor by a previous mindvault_browse page. Resumes at the next page without re-fetching earlier ones. Must be sent with the same filters; a mismatched or expired cursor is rejected, so restart without a cursor. Do not combine with offset.",
       "maxLength": 512,
@@ -2341,6 +2348,14 @@ exports[`tool schema snapshots > mindvault_preview > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_preview > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
+    },
     "resourceId": {
       "description": "The unique resource identifier from mindvault_browse or mindvault_search. Example: 'cm7x8y9z'",
       "examples": [
@@ -4042,6 +4057,14 @@ exports[`tool schema snapshots > mindvault_search > annotations 1`] = `
 exports[`tool schema snapshots > mindvault_search > input schema 1`] = `
 {
   "properties": {
+    "bypassCache": {
+      "description": "Set true to force a fresh read from the live API for this call only. A failed live read returns an error instead of an offline snapshot. Defaults to false (or MINDVAULT_CATALOG_CACHE_BYPASS).",
+      "examples": [
+        true,
+        false,
+      ],
+      "type": "boolean",
+    },
     "limit": {
       "description": "Max number of resources to return (1–100, server default 20).",
       "examples": [
@@ -4716,6 +4739,45 @@ exports[`tool schema snapshots > mindvault_setup_wallet > output schema 1`] = `
   "type": "object",
 }
 `;
+
+exports[`tool schema snapshots > mindvault_support_bundle > annotations 1`] = `
+{
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "readOnlyHint": true,
+  "title": "Export Support Bundle",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_support_bundle > input schema 1`] = `
+{
+  "properties": {
+    "incidentId": {
+      "description": "Correlation ID of the incident, as reported by the failing tool call. Example: 'mv-lx3k9a2-4f7q'.",
+      "examples": [
+        "mv-lx3k9a2-4f7q",
+      ],
+      "type": "string",
+    },
+    "maxEntries": {
+      "description": "Maximum audit-log entries to include (1–200, default 100). Newest are kept.",
+      "examples": [
+        50,
+        200,
+      ],
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+    },
+  },
+  "required": [
+    "incidentId",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_support_bundle > output schema 1`] = `null`;
 
 exports[`tool schema snapshots > mindvault_switch_network_profile > annotations 1`] = `
 {
@@ -5614,6 +5676,7 @@ exports[`tool schema snapshots > the covered tool names are pinned 1`] = `
   "mindvault_set_price",
   "mindvault_set_tags",
   "mindvault_setup_wallet",
+  "mindvault_support_bundle",
   "mindvault_switch_network_profile",
   "mindvault_transfer_ownership",
   "mindvault_tx_status",

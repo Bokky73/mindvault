@@ -84,6 +84,7 @@ import {
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
+import { supportBundleTool } from "./supportBundle.js";
 import { compareCatalogsTool } from "./catalogCompare.js";
 import { applyCatalogCursor, attachNextCatalogCursor, nextCatalogCursor } from "./catalogCursor.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
@@ -244,6 +245,8 @@ import {
   recordCatalogSnapshot,
   recordPreviewSnapshot,
 } from "./catalogCache.js";
+import { resolveCacheBypass, withBypassNotice } from "./catalogCacheBypass.js";
+import { buildCatalogCacheScope, setCatalogCacheScopeProvider } from "./catalogCacheScope.js";
 import {
   publishBatch,
   type BatchPublishItem,
@@ -1848,6 +1851,17 @@ function catalogFallbackFor(err: unknown): CatalogFallbackReason | null {
   return isRetryableStatus(mapped.status) ? { kind: "status", status: mapped.status } : null;
 }
 
+// Snapshots are isolated per profile, network id, registry contract and API
+// origin, so a profile or network switch cannot surface another context's data (#85).
+setCatalogCacheScopeProvider(() =>
+  buildCatalogCacheScope({
+    profile: activeProfileName,
+    networkId: String(NETWORK),
+    contractId: REGISTRY_CONTRACT_ID,
+    apiUrl: BASE_URL,
+  }),
+);
+
 /** Resolve a failed catalog read to a snapshot, or rethrow when it must surface. */
 function catalogSnapshotFor(err: unknown): { resources: unknown[]; notice: string } | null {
   const reason = catalogFallbackFor(err);
@@ -1860,6 +1874,10 @@ function catalogSnapshotFor(err: unknown): { resources: unknown[]; notice: strin
   };
 }
 
+async function browseOutcome(
+  filters: CatalogFilters = {},
+  bypassCache = false,
+): Promise<ToolOutcome> {
 async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome> {
   const resumed = applyCatalogCursor(filters, NETWORK);
   if (!resumed.ok) return resumed.error;
@@ -1882,9 +1900,9 @@ async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome>
     }
     raw = Array.isArray(res.data) ? res.data : [];
     recordCatalogSnapshot(raw);
-    notice = cacheStalenessNotice(res.headers);
+    notice = withBypassNotice(cacheStalenessNotice(res.headers), bypassCache);
   } catch (err) {
-    const fallback = catalogSnapshotFor(err);
+    const fallback = bypassCache ? null : catalogSnapshotFor(err);
     if (!fallback) throw err;
     raw = Array.isArray(fallback.resources) ? (fallback.resources as any[]) : [];
     notice = fallback.notice;
@@ -1913,7 +1931,10 @@ export async function browse(filters: CatalogFilters = {}): Promise<string> {
   return outcomeText(await browseOutcome(filters));
 }
 
-async function searchOutcome(filtersOrQuery: string | CatalogFilters): Promise<ToolOutcome> {
+async function searchOutcome(
+  filtersOrQuery: string | CatalogFilters,
+  bypassCache = false,
+): Promise<ToolOutcome> {
   const filters: CatalogFilters =
     typeof filtersOrQuery === "string" ? { query: filtersOrQuery } : filtersOrQuery;
 
@@ -1952,9 +1973,9 @@ async function searchOutcome(filtersOrQuery: string | CatalogFilters): Promise<T
     }
     raw = Array.isArray(res.data) ? res.data : [];
     recordCatalogSnapshot(raw);
-    notice = cacheStalenessNotice(res.headers);
+    notice = withBypassNotice(cacheStalenessNotice(res.headers), bypassCache);
   } catch (err) {
-    const fallback = catalogSnapshotFor(err);
+    const fallback = bypassCache ? null : catalogSnapshotFor(err);
     if (!fallback) throw err;
     raw = Array.isArray(fallback.resources) ? (fallback.resources as any[]) : [];
     notice = fallback.notice;
@@ -1980,7 +2001,10 @@ export async function search(filtersOrQuery: string | CatalogFilters): Promise<s
  * reachable-but-error response is surfaced verbatim — the cache only covers the
  * unreachable case.
  */
-async function previewData(resourceId: string): Promise<{ r: any; label: string | null }> {
+async function previewData(
+  resourceId: string,
+  bypassCache = false,
+): Promise<{ r: any; label: string | null }> {
   try {
     const res = await jsonFetch(`${BASE_URL}/resources/${resourceId}/meta`);
     if (!res.ok)
@@ -1995,15 +2019,15 @@ async function previewData(resourceId: string): Promise<{ r: any; label: string 
   } catch (err) {
     // Same rule as browse/search: a snapshot answers for a catalog that could
     // not answer, never for a 404 on an id the agent got wrong (#837).
-    const reason = catalogFallbackFor(err);
+    const reason = bypassCache ? null : catalogFallbackFor(err);
     const snap = reason ? getPreviewSnapshot(resourceId) : null;
     if (!snap || !reason) throw err;
     return { r: snap.meta as any, label: catalogCacheLabel(snap.savedAtMs, Date.now(), reason) };
   }
 }
 
-export async function preview(resourceId: string): Promise<string> {
-  const { r, label } = await previewData(resourceId);
+export async function preview(resourceId: string, bypassCache = false): Promise<string> {
+  const { r, label } = await previewData(resourceId, bypassCache);
   // Publisher-supplied title/description are unbounded at the source, so cap
   // them before serializing rather than truncating the JSON afterwards (#582).
   const out: Record<string, unknown> = applyPreviewLimits({
@@ -2016,6 +2040,7 @@ export async function preview(resourceId: string): Promise<string> {
     accessUrl: r.accessUrl,
   });
   if (label) out.offlineCache = label;
+  else if (bypassCache) out.cache = "bypassed";
   return serializePreview(out);
 }
 
@@ -4016,14 +4041,14 @@ async function dispatchToolOutcome(
         return listProfilesOutcome();
       case "mindvault_browse": {
         const parsed = parseCatalogFilters(rawRecord);
-        return parsed.ok ? browseOutcome(parsed.filters) : parsed.error;
+        return parsed.ok ? browseOutcome(parsed.filters, resolveCacheBypass(rawRecord)) : parsed.error;
       }
       case "mindvault_search": {
         const parsed = parseCatalogFilters(rawRecord, { requireCriteria: true });
-        return parsed.ok ? searchOutcome(parsed.filters) : parsed.error;
+        return parsed.ok ? searchOutcome(parsed.filters, resolveCacheBypass(rawRecord)) : parsed.error;
       }
       case "mindvault_preview":
-        return preview(requiredString(args, "resourceId"));
+        return preview(requiredString(args, "resourceId"), resolveCacheBypass(rawRecord));
       case "mindvault_register":
         return register(
           requiredString(args, "name"),
@@ -4208,6 +4233,8 @@ async function dispatchToolOutcome(
         return formatVerifyInstall(verifyInstall(process.env));
       case "mindvault_debug_bundle":
         return debugBundleTool(rawRecord);
+      case "mindvault_support_bundle":
+        return supportBundleTool(rawRecord);
       case "mindvault_recover_catalog_cache":
         return recoverCatalogCache();
       case "mindvault_wallet_balances":
