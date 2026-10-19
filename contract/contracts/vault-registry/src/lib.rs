@@ -1355,6 +1355,8 @@ pub enum Error {
     RecoveryAdminNotSet = 53,
 }
 
+mod recovery_target_check;
+
 #[contract]
 pub struct VaultRegistry;
 
@@ -3173,7 +3175,8 @@ impl VaultRegistry {
     /// Replace a lost admin key. Only the recovery admin may call this.
     /// Sets `new_admin` as admin immediately and clears any pending admin
     /// nomination. The recovery admin itself is unchanged. Errors
-    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin`. Emits `recover`.
+    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin` (target is the current
+    /// admin, the recovery admin, or a live pending admin). Emits `recover`.
     pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let recovery: Address = env
             .storage()
@@ -3185,6 +3188,7 @@ impl VaultRegistry {
         if new_admin == old_admin || new_admin == recovery {
             return Err(Error::SameAdmin);
         }
+        recovery_target_check::ensure_valid_recovery_target(&env, &new_admin, &old_admin, &recovery)?;
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage()
             .instance()
