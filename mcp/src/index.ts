@@ -76,6 +76,7 @@ import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
+import { compareCatalogsTool } from "./catalogCompare.js";
 import { applyCatalogCursor, attachNextCatalogCursor, nextCatalogCursor } from "./catalogCursor.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
@@ -4087,6 +4088,8 @@ async function dispatchToolOutcome(
         );
       case "mindvault_registry_count":
         return registryCount(optionalString(args, "creator"));
+      case "mindvault_compare_catalogs":
+        return compareCatalogsTool(args, jsonFetch);
       case "mindvault_update_metadata":
         return updateMetadata(requiredString(args, "resourceId"), requiredString(args, "metadata"));
       case "mindvault_set_price":

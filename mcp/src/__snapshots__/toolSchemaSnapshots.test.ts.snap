@@ -940,6 +940,175 @@ exports[`tool schema snapshots > mindvault_check_state_permissions > input schem
 
 exports[`tool schema snapshots > mindvault_check_state_permissions > output schema 1`] = `null`;
 
+exports[`tool schema snapshots > mindvault_compare_catalogs > annotations 1`] = `
+{
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "readOnlyHint": true,
+  "title": "Compare Catalogs",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_compare_catalogs > input schema 1`] = `
+{
+  "properties": {
+    "left": {
+      "description": "First profile to compare: testnet or mainnet.",
+      "enum": [
+        "testnet",
+        "mainnet",
+      ],
+      "examples": [
+        "testnet",
+      ],
+      "type": "string",
+    },
+    "limit": {
+      "description": "Max resources read from each profile (1-100, default 100).",
+      "examples": [
+        50,
+      ],
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "right": {
+      "description": "Second profile to compare; must differ from left.",
+      "enum": [
+        "testnet",
+        "mainnet",
+      ],
+      "examples": [
+        "mainnet",
+      ],
+      "type": "string",
+    },
+  },
+  "required": [
+    "left",
+    "right",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool schema snapshots > mindvault_compare_catalogs > output schema 1`] = `
+{
+  "properties": {
+    "differing": {
+      "items": {
+        "properties": {
+          "fields": {
+            "type": "object",
+          },
+          "id": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "id",
+          "fields",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "identicalCount": {
+      "type": "integer",
+    },
+    "left": {
+      "properties": {
+        "apiUrl": {
+          "type": "string",
+        },
+        "count": {
+          "type": "integer",
+        },
+        "network": {
+          "type": "string",
+        },
+        "registryContractId": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "x402Network": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "network",
+        "x402Network",
+        "apiUrl",
+        "registryContractId",
+        "count",
+      ],
+      "type": "object",
+    },
+    "onlyInLeft": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "onlyInRight": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "right": {
+      "properties": {
+        "apiUrl": {
+          "type": "string",
+        },
+        "count": {
+          "type": "integer",
+        },
+        "network": {
+          "type": "string",
+        },
+        "registryContractId": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "x402Network": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "network",
+        "x402Network",
+        "apiUrl",
+        "registryContractId",
+        "count",
+      ],
+      "type": "object",
+    },
+    "summary": {
+      "type": "string",
+    },
+    "truncated": {
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "left",
+    "right",
+    "onlyInLeft",
+    "onlyInRight",
+    "differing",
+    "identicalCount",
+    "truncated",
+    "summary",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`tool schema snapshots > mindvault_debug_bundle > annotations 1`] = `
 {
   "destructiveHint": false,
@@ -5309,6 +5478,7 @@ exports[`tool schema snapshots > the covered tool names are pinned 1`] = `
   "mindvault_check_bindings",
   "mindvault_check_consistency",
   "mindvault_check_state_permissions",
+  "mindvault_compare_catalogs",
   "mindvault_debug_bundle",
   "mindvault_export_receipts",
   "mindvault_fee_config",
