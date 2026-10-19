@@ -12,8 +12,10 @@
 
 extern crate alloc;
 
+mod anchor_status;
 mod capability_version;
 mod role_events;
+pub use anchor_status::AnchorStatus;
 pub use capability_version::ROLE_CAPABILITY_VERSION;
 pub use role_events::RoleRotation;
 
@@ -297,6 +299,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("override_purchase_receipt_anchor", "admin"),
     ("get_purchase_receipt", "—"),
     ("get_anchor_attempts", "—"),
+    ("get_anchor_status", "—"),
     // ── Access leases ─────────────────────────────────────────────────────
     ("buy_lease", "holder"),
     ("renew_lease", "holder"),
@@ -4169,6 +4172,34 @@ impl VaultRegistry {
         Self::validate_resource_id(&resource_id)?;
         let key = DataKey::AnchorAttempts(resource_id, buyer);
         Ok(Self::anchor_attempts_state(&env, &key))
+    }
+
+    /// Lifecycle status of the anchor for `(resource_id, buyer)`: `None` when
+    /// there has been no anchor activity, otherwise `Pending`, `Confirmed` or
+    /// `Failed` (see the `anchor_status` module for the transitions). Derived
+    /// from existing records, so pre-existing anchors read as `Confirmed`.
+    pub fn get_anchor_status(
+        env: Env,
+        resource_id: String,
+        buyer: Address,
+    ) -> Result<Option<AnchorStatus>, Error> {
+        Self::validate_resource_id(&resource_id)?;
+        let has_anchor = env
+            .storage()
+            .persistent()
+            .has(&DataKey::PurchaseReceipt(resource_id.clone(), buyer.clone()));
+        let has_failure = env
+            .storage()
+            .persistent()
+            .has(&DataKey::AnchorFailure(resource_id.clone(), buyer.clone()));
+        let attempts_key = DataKey::AnchorAttempts(resource_id, buyer);
+        let attempts = Self::anchor_attempts_state(&env, &attempts_key);
+        Ok(anchor_status::derive_status(
+            has_anchor,
+            has_failure,
+            attempts.attempts,
+            MAX_ANCHOR_ATTEMPTS,
+        ))
     }
 
     /// Override a purchase receipt anchor for `(resource_id, buyer)`.
