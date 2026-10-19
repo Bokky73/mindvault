@@ -281,6 +281,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("set_fee_recipient", "admin"),
     ("set_fee_destination", "admin"),
     ("get_fee_destination", "—"),
+    ("preview_fee_split", "—"),
     // ── Index repair ──────────────────────────────────────────────────────
     ("repair_index", "admin"),
     ("repair_tag_index", "admin"),
@@ -1393,6 +1394,8 @@ pub enum Error {
 mod admin_nomination_cancel;
 mod batch_state_reads;
 pub use batch_state_reads::MAX_STATE_BATCH;
+mod fee_split_preview;
+pub use fee_split_preview::FeeSplitPreview;
 mod recovery_target_check;
 mod role_inventory;
 pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
@@ -3640,6 +3643,12 @@ impl VaultRegistry {
 
     pub fn get_fee_destination(env: Env) -> FeeDestinationConfig {
         Self::load_fee_destination(&env)
+    }
+
+    /// Calculate the exact integer fee split for a proposed sale amount according
+    /// to the registry's active FeeConfig and FeeDestination.
+    pub fn preview_fee_split(env: Env, amount: i128) -> Result<FeeSplitPreview, Error> {
+        fee_split_preview::compute(&env, amount)
     }
 
     fn default_fee_destination() -> FeeDestinationConfig {
