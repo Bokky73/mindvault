@@ -11351,6 +11351,7 @@ include!("test/admin_nomination_cancel.rs");
 include!("test/recovery_target_check.rs");
 include!("test/lifecycle_events.rs");
 include!("test/storage_footprint.rs");
+include!("test/fee_split_preview.rs");
 
 include!("test/auth_fixtures.rs");
 include!("test/tombstone_read.rs");
