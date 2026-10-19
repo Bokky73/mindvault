@@ -208,6 +208,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("remove_verifier", "admin"),
     ("rotate_verifier", "admin"),
     ("is_verifier", "—"),
+    ("list_role_members", "—"),
     ("set_verification_status", "verifier"),
     ("revoke_attestation", "verifier"),
     ("get_attestation_reason_hash", "—"),
@@ -1359,6 +1360,8 @@ pub enum Error {
 
 mod admin_nomination_cancel;
 mod recovery_target_check;
+mod role_inventory;
+pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
 
 #[contract]
 pub struct VaultRegistry;
@@ -3292,6 +3295,7 @@ impl VaultRegistry {
     pub fn add_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Verifier, &verifier)?;
         Self::add_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3300,6 +3304,7 @@ impl VaultRegistry {
     pub fn remove_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &verifier);
         Self::remove_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3322,6 +3327,8 @@ impl VaultRegistry {
             return Err(Error::AlreadyRegistered);
         }
 
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &old_verifier);
+        role_inventory::track_grant(&env, RoleKind::Verifier, &new_verifier)?;
         Self::remove_verifier_internal(&env, &admin, old_verifier.clone());
         Self::add_verifier_internal(&env, &admin, new_verifier.clone());
         env.events().publish(
@@ -3333,6 +3340,15 @@ impl VaultRegistry {
             },
         );
         Ok(())
+    }
+
+    /// Page through the addresses holding `role` (admin, verifier, moderator
+    /// or settler), in grant order. Read-only. `limit` is capped at
+    /// `ROLE_PAGE_CAP` (20) and each non-admin role tracks at most
+    /// `MAX_ROLE_MEMBERS` (50) addresses; `next_cursor` is `None` at the end.
+    /// See `docs/role-inventory.md`.
+    pub fn list_role_members(env: Env, role: RoleKind, cursor: u32, limit: u32) -> RolePage {
+        role_inventory::page(&env, role, cursor, limit)
     }
 
     /// Whether `address` currently holds the verifier role.
@@ -3612,6 +3628,7 @@ impl VaultRegistry {
     pub fn add_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Settler, &settler)?;
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &true);
@@ -3631,6 +3648,7 @@ impl VaultRegistry {
     pub fn remove_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Settler, &settler);
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &false);
@@ -4402,6 +4420,7 @@ impl VaultRegistry {
     pub fn add_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Moderator, &moderator)?;
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &true);
@@ -4421,6 +4440,7 @@ impl VaultRegistry {
     pub fn remove_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Moderator, &moderator);
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &false);

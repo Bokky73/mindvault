@@ -11265,6 +11265,7 @@ fn differently_cased_tags_indexed_under_same_normalized_tag() {
     assert_eq!(results.len(), 2);
 }
 
+include!("test/role_inventory.rs");
 include!("test/admin_nomination_cancel.rs");
 include!("test/recovery_target_check.rs");
 include!("test/lifecycle_events.rs");
