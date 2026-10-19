@@ -172,6 +172,7 @@ import {
   type TimeoutService,
 } from "./httpTimeout.js";
 import { resolveToolTimeouts, timeoutForTool } from "./toolTimeoutOverrides.js";
+import { assertTimeoutsWithinDeadline, resolveTransportDeadline } from "./timeoutBounds.js";
 import {
   describeRetryPolicy,
   formatRetryLog,
@@ -300,6 +301,7 @@ const httpFetch: typeof fetch = MOCK
 
 const TIMEOUTS = resolveTimeouts(process.env);
 const TOOL_TIMEOUTS = resolveToolTimeouts(process.env).overrides;
+assertTimeoutsWithinDeadline(TIMEOUTS, TOOL_TIMEOUTS, resolveTransportDeadline(process.env));
 
 const RETRY_POLICY = retryPolicyFromEnv(process.env);
 
