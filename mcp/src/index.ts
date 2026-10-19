@@ -229,6 +229,7 @@ import {
   recordPreviewSnapshot,
 } from "./catalogCache.js";
 import { resolveCacheBypass, withBypassNotice } from "./catalogCacheBypass.js";
+import { buildCatalogCacheScope, setCatalogCacheScopeProvider } from "./catalogCacheScope.js";
 import {
   publishBatch,
   type BatchPublishItem,
@@ -1831,6 +1832,17 @@ function catalogFallbackFor(err: unknown): CatalogFallbackReason | null {
   }
   return isRetryableStatus(mapped.status) ? { kind: "status", status: mapped.status } : null;
 }
+
+// Snapshots are isolated per profile, network id, registry contract and API
+// origin, so a profile or network switch cannot surface another context's data (#85).
+setCatalogCacheScopeProvider(() =>
+  buildCatalogCacheScope({
+    profile: activeProfileName,
+    networkId: String(NETWORK),
+    contractId: REGISTRY_CONTRACT_ID,
+    apiUrl: BASE_URL,
+  }),
+);
 
 /** Resolve a failed catalog read to a snapshot, or rethrow when it must surface. */
 function catalogSnapshotFor(err: unknown): { resources: unknown[]; notice: string } | null {
