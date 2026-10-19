@@ -74,6 +74,12 @@ import {
 } from "./mock.js";
 import { purchaseHistoryTool, recordPurchase } from "./purchaseHistory.js";
 import { lookupPurchaseStatus, trackPurchaseAttempt } from "./purchaseStatusLookup.js";
+import {
+  cancellableSleep,
+  canceledToolResult,
+  isToolCanceled,
+  runCancellable,
+} from "./toolCancellation.js";
 import { Mutex } from "./mutex.js";
 import { exportReceiptsTool } from "./receipts.js";
 import { debugBundleTool } from "./debugBundle.js";
@@ -2011,7 +2017,7 @@ async function fetchPublishStatusData(resourceId: string): Promise<PublishStatus
 }
 
 function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return cancellableSleep(ms);
 }
 
 export async function publishStatus(
@@ -4253,7 +4259,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       : undefined;
   try {
     const result = await measureTool(metrics, name, () =>
-      dispatchToolOutcome(name, args, progress?.emit),
+      runCancellable(name, extra?.signal, () => dispatchToolOutcome(name, args, progress?.emit)),
     );
     // Opt-in structured telemetry stream (#891): one OTLP line to stderr per
     // tool call when MINDVAULT_METRICS_EXPORT_CONSOLE is set, so a log
@@ -4263,6 +4269,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     }
     return normalizeToolResult(name, result, hasOutputSchema);
   } catch (err: any) {
+    if (isToolCanceled(err)) return canceledToolResult(name);
     const mapped = mappedErrorOf(err);
     return {
       content: [{ type: "text", text: `Error: ${safeErrorMessage(err)}` }],
