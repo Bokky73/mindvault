@@ -182,6 +182,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get", "—"),
     ("get_resource_state", "—"),
     ("get_many", "—"),
+    ("get_resource_states", "—"),
     ("exists", "—"),
     ("exists_many", "—"),
     ("get_owner", "—"),
@@ -208,6 +209,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("remove_verifier", "admin"),
     ("rotate_verifier", "admin"),
     ("is_verifier", "—"),
+    ("list_role_members", "—"),
     ("set_verification_status", "verifier"),
     ("revoke_attestation", "verifier"),
     ("get_attestation_reason_hash", "—"),
@@ -230,6 +232,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
         "current admin (or new_admin for bootstrap)",
     ),
     ("accept_admin", "pending admin"),
+    ("cancel_admin_nomination", "admin"),
     ("bootstrap_dual_admin", "admin + recovery_admin"),
     ("recovery_admin", "—"),
     ("set_recovery_admin", "admin"),
@@ -419,6 +422,7 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("setptrs", "MetadataPointers { pointers, primary }"),
     ("nomadmin", "new_admin: Address"),
     ("accadmin", "new_admin: Address"),
+    ("nomcancel", "cancelled_nominee: Address"),
     ("netinit", "network_id: BytesN<32>"),
     ("freeze", "()"),
     (
@@ -1372,6 +1376,13 @@ pub enum Error {
     /// `recover_admin` was called but no recovery admin is configured.
     RecoveryAdminNotSet = 53,
 }
+
+mod admin_nomination_cancel;
+mod batch_state_reads;
+pub use batch_state_reads::MAX_STATE_BATCH;
+mod recovery_target_check;
+mod role_inventory;
+pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
 
 #[contract]
 pub struct VaultRegistry;
@@ -2831,6 +2842,16 @@ impl VaultRegistry {
         Ok(resource.state)
     }
 
+    /// Read the lifecycle state of several resources in one invocation,
+    /// preserving input order. Unknown or malformed ids are `None`. At most
+    /// `MAX_STATE_BATCH` (20) ids; larger batches fail with `BatchTooLarge`.
+    pub fn get_resource_states(
+        env: Env,
+        ids: Vec<String>,
+    ) -> Result<Vec<Option<ResourceState>>, Error> {
+        batch_state_reads::read(&env, &ids)
+    }
+
     /// Read several resources in one invocation, preserving input order.
     /// Missing resources are represented by `None`; valid resources are
     /// returned as `Some(Resource)`. The batch is capped to bound execution
@@ -3133,6 +3154,17 @@ impl VaultRegistry {
         Ok(())
     }
 
+    /// Cancel the pending admin nomination before it is accepted. Only the
+    /// current admin may call this. Errors `AdminNotSet` if no admin exists and
+    /// `PendingAdminNotSet` if there is no nomination to cancel. The cancelled
+    /// nominee can no longer call `accept_admin`. Emits `nomcancel` with the
+    /// cancelled nominee.
+    pub fn cancel_admin_nomination(env: Env) -> Result<(), Error> {
+        admin_nomination_cancel::cancel(&env)?;
+        Self::bump_instance(&env);
+        Ok(())
+    }
+
     /// Optional dual-key bootstrap: set `admin` and a separate
     /// `recovery_admin` in one call, so the deployment can recover via
     /// `recover_admin` if the sole admin key is lost. Both addresses must
@@ -3191,7 +3223,8 @@ impl VaultRegistry {
     /// Replace a lost admin key. Only the recovery admin may call this.
     /// Sets `new_admin` as admin immediately and clears any pending admin
     /// nomination. The recovery admin itself is unchanged. Errors
-    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin`. Emits `recover`.
+    /// `RecoveryAdminNotSet`, `AdminNotSet`, or `SameAdmin` (target is the current
+    /// admin, the recovery admin, or a live pending admin). Emits `recover`.
     pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let recovery: Address = env
             .storage()
@@ -3203,6 +3236,7 @@ impl VaultRegistry {
         if new_admin == old_admin || new_admin == recovery {
             return Err(Error::SameAdmin);
         }
+        recovery_target_check::ensure_valid_recovery_target(&env, &new_admin, &old_admin, &recovery)?;
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage()
             .instance()
@@ -3315,6 +3349,7 @@ impl VaultRegistry {
     pub fn add_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Verifier, &verifier)?;
         Self::add_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3323,6 +3358,7 @@ impl VaultRegistry {
     pub fn remove_verifier(env: Env, verifier: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &verifier);
         Self::remove_verifier_internal(&env, &admin, verifier);
         Ok(())
     }
@@ -3345,6 +3381,8 @@ impl VaultRegistry {
             return Err(Error::AlreadyRegistered);
         }
 
+        role_inventory::track_revoke(&env, RoleKind::Verifier, &old_verifier);
+        role_inventory::track_grant(&env, RoleKind::Verifier, &new_verifier)?;
         Self::remove_verifier_internal(&env, &admin, old_verifier.clone());
         Self::add_verifier_internal(&env, &admin, new_verifier.clone());
         env.events().publish(
@@ -3356,6 +3394,15 @@ impl VaultRegistry {
             },
         );
         Ok(())
+    }
+
+    /// Page through the addresses holding `role` (admin, verifier, moderator
+    /// or settler), in grant order. Read-only. `limit` is capped at
+    /// `ROLE_PAGE_CAP` (20) and each non-admin role tracks at most
+    /// `MAX_ROLE_MEMBERS` (50) addresses; `next_cursor` is `None` at the end.
+    /// See `docs/role-inventory.md`.
+    pub fn list_role_members(env: Env, role: RoleKind, cursor: u32, limit: u32) -> RolePage {
+        role_inventory::page(&env, role, cursor, limit)
     }
 
     /// Whether `address` currently holds the verifier role.
@@ -3635,6 +3682,7 @@ impl VaultRegistry {
     pub fn add_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Settler, &settler)?;
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &true);
@@ -3654,6 +3702,7 @@ impl VaultRegistry {
     pub fn remove_settler(env: Env, settler: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Settler, &settler);
         env.storage()
             .instance()
             .set(&DataKey::Settler(settler.clone()), &false);
@@ -4431,6 +4480,7 @@ impl VaultRegistry {
     pub fn add_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_grant(&env, RoleKind::Moderator, &moderator)?;
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &true);
@@ -4450,6 +4500,7 @@ impl VaultRegistry {
     pub fn remove_moderator(env: Env, moderator: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        role_inventory::track_revoke(&env, RoleKind::Moderator, &moderator);
         env.storage()
             .instance()
             .set(&DataKey::Moderator(moderator.clone()), &false);

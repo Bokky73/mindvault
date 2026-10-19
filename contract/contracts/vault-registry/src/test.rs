@@ -4717,6 +4717,11 @@ fn full_workflow_emits_exactly_the_documented_events() {
         .set_sequence_number(env.ledger().sequence() + ADMIN_NOMINATION_MIN_GAP);
     client.accept_admin(&admin2);
     record(&env, &client, &mut observed);
+    let admin3 = Address::generate(&env);
+    client.nominate_new_admin(&admin3); // -> "nomadmin"
+    record(&env, &client, &mut observed);
+    client.cancel_admin_nomination(); // -> "nomcancel"
+    record(&env, &client, &mut observed);
 
     // Verifier role, verification mirror, freeze, and index repair.
     let old_verifier = Address::generate(&env);
@@ -11340,6 +11345,10 @@ fn differently_cased_tags_indexed_under_same_normalized_tag() {
     assert_eq!(results.len(), 2);
 }
 
+include!("test/batch_state_reads.rs");
+include!("test/role_inventory.rs");
+include!("test/admin_nomination_cancel.rs");
+include!("test/recovery_target_check.rs");
 include!("test/lifecycle_events.rs");
 include!("test/storage_footprint.rs");
 
