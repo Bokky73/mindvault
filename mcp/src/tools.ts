@@ -15,6 +15,13 @@
  */
 
 import { catalogFilterInputProperties } from "./catalogFilters.js";
+import { CATALOG_CURSOR_INPUT_PROPERTY } from "./catalogCursor.js";
+import {
+  COMPARE_CATALOGS_OUTPUT_SCHEMA,
+  COMPARE_DEFAULT_LIMIT,
+  COMPARE_MAX_LIMIT,
+  COMPARE_NETWORKS,
+} from "./catalogCompare.js";
 import {
   AGENT_STATUS_OUTPUT_SCHEMA,
   ATTESTATION_VERIFICATION_OUTPUT_SCHEMA,
@@ -248,7 +255,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "List resources in the MindVault catalog with the same optional filters as mindvault_search and GET /resources: keyword, price range, verification status, resource type, owner, sort, pagination, tags, and listed state. Sort accepts newest, price_asc, price_desc, or title; results are ordered client-side too, so the order holds even when the backend ignores the parameter.",
     inputSchema: {
       type: "object",
-      properties: { ...catalogFilterInputProperties },
+      properties: {
+        ...catalogFilterInputProperties,
+        cursor: CATALOG_CURSOR_INPUT_PROPERTY,
+      },
       required: [],
     },
     outputSchema: CATALOG_LIST_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -295,6 +305,43 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: PREVIEW_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
     annotations: {
       title: "Preview Resource",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "mindvault_compare_catalogs",
+    description:
+      "Compare the catalogs of two explicitly named network profiles (testnet and mainnet), read-only. Reports resources present on only one side and field-level differences (title, description, price, type, verification status, tags) for ids present on both, after normalizing price formatting, whitespace and tag order. Output identifies each side's network, API URL, and registry contract id. Performs GET reads only; no wallet is needed and nothing is written.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        left: {
+          type: "string",
+          enum: [...COMPARE_NETWORKS],
+          description: "First profile to compare: testnet or mainnet.",
+          examples: ["testnet"],
+        },
+        right: {
+          type: "string",
+          enum: [...COMPARE_NETWORKS],
+          description: "Second profile to compare; must differ from left.",
+          examples: ["mainnet"],
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: COMPARE_MAX_LIMIT,
+          description: `Max resources read from each profile (1-${COMPARE_MAX_LIMIT}, default ${COMPARE_DEFAULT_LIMIT}).`,
+          examples: [50],
+        },
+      },
+      required: ["left", "right"],
+    },
+    outputSchema: COMPARE_CATALOGS_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
+    annotations: {
+      title: "Compare Catalogs",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
