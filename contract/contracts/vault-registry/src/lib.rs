@@ -12,7 +12,9 @@
 
 extern crate alloc;
 
+mod capability_version;
 mod role_events;
+pub use capability_version::ROLE_CAPABILITY_VERSION;
 pub use role_events::RoleRotation;
 
 use soroban_sdk::{
@@ -517,6 +519,9 @@ pub struct RegistryInfo {
     /// (`env.ledger().network_id()`), so clients can confirm they are
     /// talking to the network they expect without a hardcoded config value.
     pub network_id: BytesN<32>,
+    /// Role capability version (`ROLE_CAPABILITY_VERSION`): lets clients detect
+    /// which role methods and role-event shapes exist before invoking them.
+    pub role_capability_version: u32,
 }
 
 /// Compact version struct returned by [`VaultRegistry::contract_version`].
@@ -2957,6 +2962,7 @@ impl VaultRegistry {
             version: String::from_str(&env, env!("CARGO_PKG_VERSION")),
             resource_schema_version: RESOURCE_SCHEMA_VERSION,
             network_id: env.ledger().network_id(),
+            role_capability_version: ROLE_CAPABILITY_VERSION,
         }
     }
 
