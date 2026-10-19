@@ -3,7 +3,7 @@
  *
  * A cursor is an opaque base64url token that resumes a browse at the offset
  * where the previous page ended. It is bound to the filter set that produced it
- * (and, since #79, to the active network), expires after a short window, and is
+ * and to the network it was issued on (#79), expires after a short window, and is
  * validated strictly: anything malformed, mismatched, or stale is rejected with
  * a recoverable message telling the agent to restart without a cursor.
  */
@@ -37,6 +37,8 @@ interface CatalogCursorPayload {
   lim: number;
   /** Fingerprint of the filter set (excluding paging). */
   fp: string;
+  /** Network the page was read from (e.g. stellar:testnet), so profiles never mix. */
+  net: string;
   /** Issue time, epoch milliseconds. */
   iat: number;
 }
@@ -67,6 +69,7 @@ export function encodeCatalogCursor(
   filters: CatalogFilters,
   offset: number,
   limit: number,
+  network: string,
   nowMs: number = Date.now(),
 ): string {
   const payload: CatalogCursorPayload = {
@@ -74,6 +77,7 @@ export function encodeCatalogCursor(
     off: offset,
     lim: limit,
     fp: catalogFilterFingerprint(filters),
+    net: network,
     iat: nowMs,
   };
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -86,6 +90,7 @@ function fail(reason: string): CatalogCursorDecode {
 export function decodeCatalogCursor(
   cursor: string,
   filters: CatalogFilters,
+  network: string,
   nowMs: number = Date.now(),
 ): CatalogCursorDecode {
   if (cursor.length === 0 || cursor.length > CATALOG_CURSOR_MAX_LENGTH) {
@@ -113,6 +118,7 @@ export function decodeCatalogCursor(
     p.lim < 1 ||
     p.lim > CATALOG_MAX_LIMIT ||
     typeof p.fp !== "string" ||
+    typeof p.net !== "string" ||
     typeof p.iat !== "number" ||
     !Number.isFinite(p.iat)
   ) {
@@ -120,6 +126,9 @@ export function decodeCatalogCursor(
   }
   if (nowMs - p.iat > CATALOG_CURSOR_TTL_MS || p.iat - nowMs > CATALOG_CURSOR_TTL_MS) {
     return fail("the cursor has expired and the catalog may have changed.");
+  }
+  if (p.net !== network) {
+    return fail(`the cursor was issued on ${p.net}, but the active network is ${network}.`);
   }
   if (p.fp !== catalogFilterFingerprint(filters)) {
     return fail("the filters differ from the ones this cursor was issued for.");
@@ -137,6 +146,7 @@ export type CatalogCursorApplied =
  */
 export function applyCatalogCursor(
   filters: CatalogFilters,
+  network: string,
   nowMs: number = Date.now(),
 ): CatalogCursorApplied {
   if (!filters.cursor) return { ok: true, filters };
@@ -146,7 +156,7 @@ export function applyCatalogCursor(
       error: "Invalid arguments: pass either cursor or offset, not both.",
     };
   }
-  const decoded = decodeCatalogCursor(filters.cursor, filters, nowMs);
+  const decoded = decodeCatalogCursor(filters.cursor, filters, network, nowMs);
   if (!decoded.ok) return decoded;
   const resolved: CatalogFilters = {
     ...filters,
@@ -164,11 +174,12 @@ export function applyCatalogCursor(
 export function nextCatalogCursor(
   filters: CatalogFilters,
   fetched: number,
+  network: string,
   nowMs: number = Date.now(),
 ): string | null {
   const limit = filters.limit ?? CATALOG_DEFAULT_LIMIT;
   if (fetched <= 0 || fetched < limit) return null;
-  return encodeCatalogCursor(filters, (filters.offset ?? 0) + fetched, limit, nowMs);
+  return encodeCatalogCursor(filters, (filters.offset ?? 0) + fetched, limit, network, nowMs);
 }
 
 /** Append the next cursor to a browse outcome (text line + structured field). */

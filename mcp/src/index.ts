@@ -1845,7 +1845,7 @@ function catalogSnapshotFor(err: unknown): { resources: unknown[]; notice: strin
 }
 
 async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome> {
-  const resumed = applyCatalogCursor(filters);
+  const resumed = applyCatalogCursor(filters, NETWORK);
   if (!resumed.ok) return resumed.error;
   filters = resumed.filters;
   const qs = buildCatalogQueryString(filters);
@@ -1889,7 +1889,7 @@ async function browseOutcome(filters: CatalogFilters = {}): Promise<ToolOutcome>
       : items.map(formatResource).join("\n\n");
   return attachNextCatalogCursor(
     catalogOutcome(items, body, notice),
-    items.length > 0 ? nextCatalogCursor(filters, raw.length) : null,
+    items.length > 0 ? nextCatalogCursor(filters, raw.length, NETWORK) : null,
   );
 }
 
