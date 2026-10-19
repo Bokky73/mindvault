@@ -256,6 +256,14 @@ MIT
 
 ## Handsoff notes
 
+<!-- handsoff-issue-11 -->
+- #11: [Contract] [Bug] Make cursor pagination stable when resources are tombstoned
+
+<!-- handsoff-issue-13 -->
+- #13: [Contract] [Bug] Reject duplicate IDs within a single register_batch call
+
+<!-- handsoff-issue-14 -->
+- #14: [Contract] [Feature] Add batch metadata-pointer updates with per-item results
 <!-- handsoff-issue-7 -->
 - #7: [MCP] [Bug] state backup restore accepts a file that belongs to another network profile
 
