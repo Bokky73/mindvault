@@ -300,6 +300,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get_refund", "—"),
     ("get_refunded_amount", "—"),
     ("get_refund_deadline", "—"),
+    ("get_remaining_refundable", "—"),
     ("anchor_purchase_receipt", "verifier"),
     ("attempt_anchor_purchase_receipt", "verifier"),
     ("override_purchase_receipt_anchor", "admin"),
@@ -489,7 +490,7 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("refwin", "(old_window_ledgers: u32, new_window_ledgers: u32)"),
     (
         "refund",
-        "RefundReceipt { refund_id, payment_receipt_id, resource_id, recipient, amount, tx_hash, initiated_by, recorded_at, admin_override }",
+        "RefundReceipt { refund_id, payment_receipt_id, resource_id, recipient, amount, tx_hash, initiated_by, recorded_at, admin_override, remaining_balance }",
     ),
     ("addmod", "RoleChange { admin, target, granted: true }"),
     ("rmmod", "RoleChange { admin, target, granted: false }"),
@@ -1163,6 +1164,7 @@ pub struct RefundReceipt {
     pub initiated_by: Address,
     pub recorded_at: u32,
     pub admin_override: bool,
+    pub remaining_balance: i128,
 }
 
 /// Immutable on-chain anchor for a purchase receipt hash.
@@ -4131,6 +4133,17 @@ impl VaultRegistry {
         Ok(refunded)
     }
 
+    /// Remaining balance that can still be refunded for a settled payment receipt.
+    pub fn get_remaining_refundable(env: Env, payment_receipt_id: String) -> Result<i128, Error> {
+        let payment = Self::get_payment(env.clone(), payment_receipt_id.clone())?;
+        let key = DataKey::RefundedAmount(payment_receipt_id);
+        let refunded: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::bump_persistent(&env, &key);
+        }
+        Ok(payment.amount.saturating_sub(refunded))
+    }
+
     /// Exclusive ledger deadline for creator refunds of a settled payment.
     pub fn get_refund_deadline(env: Env, payment_receipt_id: String) -> Result<u32, Error> {
         let payment = Self::get_payment(env.clone(), payment_receipt_id.clone())?;
@@ -5242,7 +5255,20 @@ impl VaultRegistry {
         Self::validate_tx_hash(&tx_hash)?;
 
         let refund_key = DataKey::RefundReceipt(refund_id.clone());
-        if env.storage().persistent().has(&refund_key) {
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, RefundReceipt>(&refund_key)
+        {
+            if existing.payment_receipt_id == payment_receipt_id
+                && existing.recipient == recipient
+                && existing.amount == amount
+                && existing.tx_hash == tx_hash
+                && existing.initiated_by == initiator
+                && existing.admin_override == admin_override
+            {
+                return Ok(());
+            }
             return Err(Error::ReceiptAlreadyExists);
         }
         let refund_tx_key = DataKey::RefundTxHash(tx_hash.clone());
@@ -5301,6 +5327,7 @@ impl VaultRegistry {
         let next_refunded = refunded
             .checked_add(amount)
             .ok_or(Error::PaymentAmountMismatch)?;
+        let remaining_balance = payment.amount.saturating_sub(next_refunded);
 
         let refund = RefundReceipt {
             refund_id: refund_id.clone(),
@@ -5312,6 +5339,7 @@ impl VaultRegistry {
             initiated_by: initiator,
             recorded_at: env.ledger().sequence(),
             admin_override,
+            remaining_balance,
         };
         env.storage().persistent().set(&refund_key, &refund);
         Self::bump_persistent(env, &refund_key);

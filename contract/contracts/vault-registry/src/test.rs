@@ -11362,6 +11362,7 @@ include!("test/capability_version.rs");
 include!("test/anchor_status.rs");
 include!("test/flag_details.rs");
 include!("test/payment_idempotency.rs");
+include!("test/partial_refunds.rs");
 include!("test/stellar_wave_804_805_806_808.rs");
 include!("test/leases.rs");
 include!("test/lease_fee_protection.rs");
