@@ -23,6 +23,12 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { listCatalogResources, readCatalogResource } from "./catalogResources.js";
+import {
+  MCP_TOOL_CAPABILITY_VERSION,
+  SERVER_METADATA_URI,
+  readServerMetadata,
+  serverMetadataResource,
+} from "./serverMetadataResource.js";
 import { PROMPT_DEFINITIONS, getPrompt } from "./prompts.js";
 import { createProgressEmitter, scopeProgressToRequest } from "./progress.js";
 import { truncateResponse } from "./truncation.js";
@@ -89,7 +95,7 @@ import { compareCatalogsTool } from "./catalogCompare.js";
 import { applyCatalogCursor, attachNextCatalogCursor, nextCatalogCursor } from "./catalogCursor.js";
 import { exportReceiptsToolWithTimeout } from "./receipts.js";
 import { normalizeToolResult, outcomeText, type ToolOutcome } from "./toolResult.js";
-import { advertisedTools, hasOutputSchema } from "./toolSurface.js";
+import { advertisedTools, outputSchemaFor } from "./toolSurface.js";
 import { dryRunPublish, dryRunBuy, type DryRunPublishLive } from "./dryRun.js";
 import { initAuditLogging } from "./auditLog.js";
 import { REGISTRY_LIST_DEFAULT_LIMIT, REGISTRY_LIST_DEFAULT_START } from "./registryPagination.js";
@@ -4263,7 +4269,7 @@ export async function dispatchTool(
 
 /** Test helper: wrap a handler outcome the same way CallTool does. */
 export function normalizeToolResultForTest(name: string, outcome: ToolOutcome) {
-  return normalizeToolResult(name, outcome, hasOutputSchema);
+  return normalizeToolResult(name, outcome, outputSchemaFor);
 }
 
 const server = new Server(
@@ -4277,12 +4283,27 @@ const server = new Server(
 // invoking a tool. URIs are stable: mindvault://resource/<id>. Reads never
 // return gated content — only the public meta endpoint is consulted.
 
-server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-  resources: await listCatalogResources(),
-}));
+server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  let catalogResources = [];
+  try {
+    catalogResources = await listCatalogResources();
+  } catch {
+    logger.warn("MindVault MCP catalog resources unavailable; exposing server metadata only.");
+  }
+  return { resources: [serverMetadataResource(), ...catalogResources] };
+});
 
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => ({
-  contents: [await readCatalogResource(request.params.uri)],
+  contents: [
+    request.params.uri === SERVER_METADATA_URI
+      ? readServerMetadata(request.params.uri, {
+          activeNetwork: STELLAR_NETWORK,
+          registryId: REGISTRY_CONTRACT_ID || null,
+          toolCapabilityVersion: MCP_TOOL_CAPABILITY_VERSION,
+          status: "running",
+        })
+      : await readCatalogResource(request.params.uri),
+  ],
 }));
 
 // ListTools is derived from TOOL_DEFINITIONS rather than restated here (#596).
@@ -4317,14 +4338,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     if (metricsExportToConsoleEnabled(process.env) && metrics.enabled) {
       console.error(metricsExportLine(metrics.snapshot(), "otlp"));
     }
-    return normalizeToolResult(name, result, hasOutputSchema);
+    return normalizeToolResult(name, result, outputSchemaFor);
   } catch (err: any) {
     if (isToolCanceled(err)) return canceledToolResult(name);
     const mapped = mappedErrorOf(err);
     return {
       content: [{ type: "text", text: `Error: ${safeErrorMessage(err)}` }],
       isError: true,
-      ...(mapped ? { structuredContent: { troubleshooting: troubleshootingHint(mapped) } } : {}),
+      ...(mapped && !outputSchemaFor(name)
+        ? { structuredContent: { troubleshooting: troubleshootingHint(mapped) } }
+        : {}),
     };
   } finally {
     await progress?.settle();
