@@ -256,6 +256,14 @@ MIT
 
 ## Handsoff notes
 
+<!-- handsoff-issue-7 -->
+- #7: [MCP] [Bug] state backup restore accepts a file that belongs to another network profile
+
+<!-- handsoff-issue-8 -->
+- #8: [Contract] [Feature] Add versioned resource migrations with explicit upgrade guards
+
+<!-- handsoff-issue-9 -->
+- #9: [Contract] [Bug] Prevent stale creator indexes after repeated ownership transfers
 <!-- handsoff-issue-15 -->
 - #15: [Contract] [Bug] Ensure metadata freeze cannot be bypassed through batch setters
 
