@@ -182,6 +182,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get", "—"),
     ("get_resource_state", "—"),
     ("get_many", "—"),
+    ("get_resource_states", "—"),
     ("exists", "—"),
     ("exists_many", "—"),
     ("get_owner", "—"),
@@ -1359,6 +1360,8 @@ pub enum Error {
 }
 
 mod admin_nomination_cancel;
+mod batch_state_reads;
+pub use batch_state_reads::MAX_STATE_BATCH;
 mod recovery_target_check;
 mod role_inventory;
 pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
@@ -2819,6 +2822,16 @@ impl VaultRegistry {
         Self::validate_resource_id(&id)?;
         let resource = Self::load(&env, &id)?;
         Ok(resource.state)
+    }
+
+    /// Read the lifecycle state of several resources in one invocation,
+    /// preserving input order. Unknown or malformed ids are `None`. At most
+    /// `MAX_STATE_BATCH` (20) ids; larger batches fail with `BatchTooLarge`.
+    pub fn get_resource_states(
+        env: Env,
+        ids: Vec<String>,
+    ) -> Result<Vec<Option<ResourceState>>, Error> {
+        batch_state_reads::read(&env, &ids)
     }
 
     /// Read several resources in one invocation, preserving input order.
