@@ -1266,15 +1266,34 @@ has been set, or `Unauthorized` if the caller does not match the stored admin.
 #### Payment-scope pause
 
 `set_payments_paused(admin, true)` arms a second, independent pause that blocks
-only the value-moving write paths—payments, refunds, anchors, and lease
-purchases/settlements—while catalog management and all read-only methods stay
-available.
+payment, refund, anchor, and lease state writes while catalog management and all
+read-only methods stay available. The registry does not custody or transfer
+USDC; this pause rejects registry state transitions and cannot stop off-contract
+payment transfers.
 
-Methods blocked when payment-scope paused (return `Error::ContractPaused`):
-- payments: `record_payment`, `record_payment_idempotent`, `settle_payment`
-- refunds: `record_creator_refund`, `record_admin_refund`
-- anchors: `anchor_purchase_receipt`, `attempt_anchor_purchase_receipt`, `override_purchase_receipt_anchor`, `record_anchor_failure`, `retry_anchor_purchase_receipt`
-- leases: `buy_lease`, `record_lease`, `settle_lease`, `renew_lease`
+The write-path pause matrix is:
+
+| Method | Global pause | Payment-scope pause |
+| --- | --- | --- |
+| `record_payment` | Blocked | Blocked |
+| `record_payment_idempotent` | Blocked | Blocked |
+| `settle_payment` | Blocked | Blocked |
+| `record_creator_refund` | Blocked | Blocked |
+| `record_admin_refund` | Blocked | Blocked |
+| `anchor_purchase_receipt` | Blocked | Blocked |
+| `attempt_anchor_purchase_receipt` | Blocked | Blocked |
+| `override_purchase_receipt_anchor` | Blocked | Blocked |
+| `record_anchor_failure` | Blocked | Blocked |
+| `retry_anchor_purchase_receipt` | Blocked | Blocked |
+| `buy_lease` | Blocked | Blocked |
+| `record_lease` | Blocked | Blocked |
+| `settle_lease` | Blocked | Blocked |
+| `renew_lease` | Blocked | Blocked |
+| `revoke_lease` | Blocked | Blocked |
+
+Each rejected call returns `Error::ContractPaused` without changing contract
+state. This matrix is exercised by
+[`payment_pause_matrix.rs`](./contracts/vault-registry/src/test/payment_pause_matrix.rs).
 
 The global pause remains broader (blocks all writes). `is_payments_paused()` is
 independent of `is_paused()`. `set_payments_paused` requires the current admin,

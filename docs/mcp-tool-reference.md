@@ -59,6 +59,10 @@ For client installation and configuration see
 | `mindvault_lease_status`   | Read the access lease recorded on the vault registry contract for a resource and holder (defaults to the agent wallet): tier, state, start and expiry ledgers, and whether it currently grants access. Read-only; no payment.                                                                                                                                                                                                                                                                                                  | yes        |
 | `mindvault_publish_status` | Poll a published resource's verification and on-chain sync status. Returns verificationStatus (pending, verified, rejected, skipped), listed, onchainStatus, onchainTxHash, and optional verification details. Pass wait: true to poll until verification settles or timeoutMs elapses. Deterministic errors for missing resourceId and 404s.                                                                                                                                                                                  | yes        |
 
+The registry's payment-scope emergency pause can reject payment, refund, anchor,
+or lease state writes with `ContractPaused`; MCP tools surface this as a
+contract error. It does not halt USDC transfers that happen outside the registry.
+
 ## On-chain Management
 
 | Tool                           | Description                                                                                                                                                                                                                                                                                                                                                                                                                     | Structured |

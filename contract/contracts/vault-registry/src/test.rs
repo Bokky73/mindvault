@@ -11370,3 +11370,4 @@ include!("test/cursor_paging.rs");
 include!("test/payment_listing.rs");
 include!("test/anchor_backoff.rs");
 include!("test/fee_rounding_proptest.rs");
+include!("test/payment_pause_matrix.rs");
