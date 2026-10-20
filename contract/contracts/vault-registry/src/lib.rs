@@ -104,6 +104,9 @@ pub const TOP_TAGS_CAP: u32 = 20;
 pub const MAX_BATCH_REGISTER: u32 = 10;
 /// Maximum number of prices that can be updated in one `set_price_many` call.
 pub const MAX_BATCH_PRICE_UPDATES: u32 = 10;
+/// Maximum number of ids accepted by a single `repair_index_chunk` call, so
+/// each chunked index-repair transaction stays bounded on large registries.
+pub const REPAIR_INDEX_CHUNK_CAP: u32 = 50;
 
 // ── Fee / royalty configuration ──────────────────────────────────────────────
 /// Fee basis-point ceiling: 50 % (5 000 bp). Neither platform_fee_bps nor
@@ -284,6 +287,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("preview_fee_split", "—"),
     // ── Index repair ──────────────────────────────────────────────────────
     ("repair_index", "admin"),
+    ("repair_index_chunk", "admin"),
     ("repair_tag_index", "admin"),
     // ── Payment receipts ──────────────────────────────────────────────────
     ("record_payment", "settler + payer"),
@@ -358,7 +362,7 @@ pub const ERROR_SCHEMA: &[(u32, &str, &str)] = &[
     (20, "InvalidVerificationTransition", "The requested `VerificationStatus` transition is not allowed (e.g. same-status no-op, or reverting to `Pending`)."),
     (21, "AlreadyFrozen", "`freeze_metadata` was called on a resource whose metadata is already frozen."),
     (22, "MetadataFrozen", "`update_metadata` was called on a resource whose metadata has been frozen."),
-    (23, "DuplicateInRepair", "`repair_index` received a list with duplicate resource ids."),
+    (23, "DuplicateInRepair", "`repair_index` or `repair_index_chunk` received a list with duplicate resource ids."),
     (24, "InvalidTxHash", "A payment or refund `tx_hash` is empty or exceeds `MAX_TX_HASH_LEN` (128 bytes)."),
     (25, "InvalidPaymentAmount", "A payment or refund `amount` is `<= 0`, or a refund window is outside its allowed bounds."),
     (26, "NotModerator", "Caller does not hold the moderator role."),
@@ -372,7 +376,7 @@ pub const ERROR_SCHEMA: &[(u32, &str, &str)] = &[
     (34, "FeeBpsTooHigh", "A fee or fee-destination basis-point value exceeds its configured ceiling."),
     (35, "TotalFeeTooHigh", "The combined fee policy or fee-destination split is invalid."),
     (36, "CountOverflow", "The global resource count would overflow `u32`."),
-    (37, "BatchTooLarge", "`get_many` or `get_owner_many` was called with more than 20 ids."),
+    (37, "BatchTooLarge", "`get_many` or `get_owner_many` received more than 20 ids, or `repair_index_chunk` received more than `REPAIR_INDEX_CHUNK_CAP` (50) ids."),
     (38, "DuplicateReceipt", "A purchase receipt is already anchored for `(resource_id, buyer)`."),
     (39, "FlagReasonHashTooLong", "`reason_hash` in `set_flag_reason_hash` exceeds `MAX_FLAG_REASON_HASH_LEN` (64 bytes)."),
     (40, "ContractPaused", "A state-changing method was called while the registry is paused."),
@@ -389,6 +393,7 @@ pub const ERROR_SCHEMA: &[(u32, &str, &str)] = &[
     (51, "InvalidMetadataPointers", "`set_metadata_pointers` received an empty, oversized (> `MAX_METADATA_POINTERS`), or duplicate pointer list, or an out-of-range `primary` index."),
     (52, "AdminAlreadySet", "`bootstrap_dual_admin` was called after an admin was already set."),
     (53, "RecoveryAdminNotSet", "`recover_admin` was called but no recovery admin is configured."),
+    (54, "InvalidRepairCursor", "`repair_index_chunk` received a cursor past the current `Count`, which would claim index slots the repair never wrote."),
 ];
 
 /// Canonical list of every event topic this contract emits, paired with a
@@ -1391,6 +1396,9 @@ pub enum Error {
     AdminAlreadySet = 52,
     /// `recover_admin` was called but no recovery admin is configured.
     RecoveryAdminNotSet = 53,
+    /// A `repair_index_chunk` cursor exceeded the current `Count`, which would
+    /// claim index slots the repair never wrote.
+    InvalidRepairCursor = 54,
 }
 
 mod admin_nomination_cancel;
@@ -3516,6 +3524,89 @@ impl VaultRegistry {
         env.events()
             .publish((symbol_short!("reindex"), old_count), len);
         Ok(())
+    }
+
+    /// Bounded, resumable variant of [`Self::repair_index`] for registries
+    /// too large to rebuild in a single transaction. Writes the next chunk of
+    /// an authoritative ordered id list into the pagination index and returns
+    /// the cursor to pass to the following call, so an interrupted repair
+    /// resumes safely from the last completed cursor.
+    ///
+    /// `ids` carries the next slice of the operator's authoritative list —
+    /// at most [`REPAIR_INDEX_CHUNK_CAP`] ids (else `BatchTooLarge`) — that
+    /// belongs at catalog positions `cursor..cursor + ids.len()`. Every id
+    /// must already exist as a registered `Resource` (else `NotFound`) and
+    /// the chunk must not contain duplicates (else `DuplicateInRepair`);
+    /// validation covers the whole chunk before any write, so a bad chunk
+    /// fails atomically exactly like `repair_index`. Duplicates spanning two
+    /// different chunks cannot be detected on-chain — the caller must
+    /// de-duplicate the authoritative list off-chain before chunking it.
+    ///
+    /// The chunk is written to `Index(cursor..cursor + ids.len())` and
+    /// `Count` is then set to `cursor + ids.len()` (checked add, else
+    /// `CountOverflow`), so `list`/`list_page`/`count` always expose a
+    /// fully validated prefix even mid-repair. `cursor` must not exceed the
+    /// current `Count` (else `InvalidRepairCursor`): that invariant is what
+    /// guarantees a chunk never claims an index slot the repair did not
+    /// write. An empty chunk is a silent no-op that returns `cursor`
+    /// unchanged and emits no event.
+    ///
+    /// Emits one `reindex` event per non-empty chunk, carrying the count
+    /// before the chunk and the count after it (the returned cursor), so
+    /// audit tooling sees incremental progress with the same topic the
+    /// atomic `repair_index` uses. Same derived-only boundary as
+    /// `repair_index`: `Resource` storage is never read for content,
+    /// written, or deleted. See `docs/index-repair.md` for the full
+    /// strategy.
+    pub fn repair_index_chunk(env: Env, ids: Vec<String>, cursor: u32) -> Result<u32, Error> {
+        let admin = Self::require_admin(&env)?;
+        admin.require_auth();
+        Self::require_not_paused(&env)?;
+
+        if ids.len() > REPAIR_INDEX_CHUNK_CAP {
+            return Err(Error::BatchTooLarge);
+        }
+
+        let old_count: u32 = env.storage().instance().get(&DataKey::Count).unwrap_or(0);
+        if cursor > old_count {
+            return Err(Error::InvalidRepairCursor);
+        }
+
+        let len = ids.len();
+        if len == 0 {
+            return Ok(cursor);
+        }
+
+        for i in 0..len {
+            let id = ids.get(i).unwrap();
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::Resource(id.clone()))
+            {
+                return Err(Error::NotFound);
+            }
+            for j in (i + 1)..len {
+                if id == ids.get(j).unwrap() {
+                    return Err(Error::DuplicateInRepair);
+                }
+            }
+        }
+
+        let end = cursor.checked_add(len).ok_or(Error::CountOverflow)?;
+
+        for i in 0..len {
+            let id = ids.get(i).unwrap();
+            let idx_key = DataKey::Index(cursor + i);
+            env.storage().persistent().set(&idx_key, &id);
+            Self::bump_persistent(&env, &idx_key);
+        }
+        env.storage().instance().set(&DataKey::Count, &end);
+        Self::bump_instance(&env);
+
+        env.events()
+            .publish((symbol_short!("reindex"), old_count), end);
+        Ok(end)
     }
 
     /// Set the registry-level fee / royalty configuration. Only the admin may
