@@ -1129,6 +1129,12 @@ For feature detection, `resource_schema_version()` returns
 `resource_schema_version() >= N` without decoding `contract_version()` or
 `registry_info()`.
 
+The MindVault MCP's read-only `mindvault_contract_preflight` checks the
+configured contract ID against `registry_info()`, compares `network_id` with
+the configured network passphrase, and accepts only the Resource schema version
+supported by that MCP release. The MCP runs this check before publishing or
+submitting an on-chain registration; it does not modify contract state.
+
 ### Deployment network guard
 
 | Constant                   | Value                        | Description                                           |
