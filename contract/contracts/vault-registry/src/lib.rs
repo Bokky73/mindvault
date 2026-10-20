@@ -5036,10 +5036,11 @@ impl VaultRegistry {
     /// call this. Revocation is immediate and terminal: `lease_is_active`
     /// returns `false` from this ledger on, and the holder may buy a new
     /// lease afterwards. Errors `NotFound` if no lease exists for the pair
-    /// and `InvalidLeaseTransition` if it is already `Revoked`. Emits
-    /// `leaserevk`.
+    /// and `InvalidLeaseTransition` if it is already `Revoked`. Returns
+    /// `ContractPaused` while either pause is active. Emits `leaserevk`.
     pub fn revoke_lease(env: Env, resource_id: String, holder: Address) -> Result<Lease, Error> {
         Self::require_not_paused(&env)?;
+        Self::require_not_payments_paused(&env)?;
         Self::validate_resource_id(&resource_id)?;
         let resource = Self::load(&env, &resource_id)?;
         resource.creator.require_auth();
