@@ -99,6 +99,7 @@ impl RegistryContract {
     pub fn register(env: Env, owner: Address, label: String, metadata: Bytes) -> u64 {
         owner.require_auth();
         let id = entry_count(&env);
+        let next_id = id.checked_add(1).expect("CountOverflow: registry entry count overflow");
         let entry = RegistryEntry {
             id,
             owner,
@@ -106,7 +107,7 @@ impl RegistryContract {
             metadata,
         };
         env.storage().persistent().set(&entry_key(&env, id), &entry);
-        env.storage().instance().set(&ENTRY_COUNT_KEY, &(id + 1));
+        env.storage().instance().set(&ENTRY_COUNT_KEY, &next_id);
         id
     }
 
