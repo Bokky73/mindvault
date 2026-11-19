@@ -62,13 +62,10 @@ pub(crate) fn compute_with_royalty(
 
     let (raw_platform_fee, royalty_fee) = match fee_config {
         Some(ref config) => {
-            let pf = amount
-                .saturating_mul(i128::from(config.platform_fee_bps))
+            let pf = amount.saturating_mul(i128::from(config.platform_fee_bps))
                 / i128::from(FEE_BPS_DENOM);
             let rf = if include_royalty {
-                amount
-                    .saturating_mul(i128::from(config.royalty_bps))
-                    / i128::from(FEE_BPS_DENOM)
+                amount.saturating_mul(i128::from(config.royalty_bps)) / i128::from(FEE_BPS_DENOM)
             } else {
                 0
             };
@@ -78,8 +75,7 @@ pub(crate) fn compute_with_royalty(
     };
 
     let destination_fee = if raw_platform_fee > 0 && dest_config.bps > 0 {
-        raw_platform_fee
-            .saturating_mul(i128::from(dest_config.bps))
+        raw_platform_fee.saturating_mul(i128::from(dest_config.bps))
             / i128::from(MAX_FEE_DESTINATION_BPS)
     } else {
         0i128

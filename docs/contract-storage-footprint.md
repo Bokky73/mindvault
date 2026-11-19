@@ -103,7 +103,14 @@ shared bounded view and is not included in the per-registration aggregate.
 - **`FlagModerator`** holds a single `Address`: the moderator whose
   `flag_resource`, `unflag_resource`, or `set_flag_reason_hash` came last,
   read back by `flag_details`. It is one entry per moderated resource and is
-  overwritten in place, so it never grows.
+  overwritten in place, so it never grows. Moderator writes also refresh any
+  attached `FlagReasonHash` entry's TTL so both keys stay synchronized.
+- **`MetadataPointers`** holds a bounded `MetadataPointers { pointers, primary }`
+  mirror set (1–`MAX_METADATA_POINTERS` = 4 unique pointers, each at most 512
+  bytes) written by `set_metadata_pointers` and cleared by `update_metadata`
+  when the primary changes. Its TTL is bumped on `set_metadata_pointers`,
+  `get_metadata_pointers`, `extend_resource_ttl`, and any resource update saved
+  via `save`.
 - **`DataKey::DisputeFlag` is never written.** The dispute flag lives on the
   `Resource` struct (see `flag_resource`), so the key exists in the `DataKey`
   enum without a corresponding entry.
@@ -131,6 +138,8 @@ lifetimes, not a promise that an expired entry can be read without restoration.
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | Role grant, revoke, or rotation          | `Verifier`, `Moderator`, `Settler`, and role member lists                                                                         | Shared instance TTL; role lists bump on each actual list mutation |
 | Resource registration and catalog repair | `Resource`, `Index`, `CreatorResources`; `Count` and creator/listed counts                                                        | Each persistent key; shared instance for counters                 |
+| Metadata mirrors and resource TTL extend | `MetadataPointers`, `Resource`                                                                                                    | Both persistent keys refreshed together                           |
+| Moderation flag or reason hash update    | `Resource`, `FlagModerator`, `FlagReasonHash`                                                                                     | Each written/attached persistent key                              |
 | Tag add, remove, or repair               | `TagIndex`; `TagCount`, `TopTags`                                                                                                 | Each persistent index key; shared instance for popularity         |
 | Payment record and settlement            | `PaymentReceipt`, `PaymentRecipient`, `PaymentIndex`, `PaymentTxHash`, `BuyerPayments`, `BuyerResourcePayments`, `RefundDeadline` | Each written persistent key                                       |
 | Fee configuration or destination update  | `FeeConfig`, `FeeDestination`                                                                                                     | Shared instance TTL                                               |
