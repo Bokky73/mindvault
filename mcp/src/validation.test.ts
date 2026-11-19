@@ -415,6 +415,29 @@ describe("flag arguments", () => {
   });
 });
 
+describe("ownership transfer handoff arguments (#249)", () => {
+  it("accepts optional terms handoff and attestation reset fields", () => {
+    const args = validateToolArgs("mindvault_transfer_ownership", {
+      resourceId: "res-001",
+      newCreator: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+      newTermsHash: "sha256:0123456789abcdef",
+      resetAttestation: "true",
+    });
+
+    expect(optionalString(args, "newTermsHash")).toBe("sha256:0123456789abcdef");
+    expect(flag(args, "resetAttestation")).toBe(true);
+  });
+
+  it("rejects a terms hash longer than the contract limit", () => {
+    const err = expectInvalid("mindvault_transfer_ownership", {
+      resourceId: "res-001",
+      newCreator: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+      newTermsHash: "a".repeat(65),
+    });
+    expect(err.message).toContain("at most 64");
+  });
+});
+
 describe("hash arguments", () => {
   it("normalizes txHash to bare lowercase hex", () => {
     const args = validateToolArgs("mindvault_tx_status", { txHash: VALID_SHA256.toUpperCase() });

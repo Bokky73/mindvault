@@ -5134,6 +5134,14 @@ exports[`tool schema snapshots > mindvault_transfer_ownership > input schema 1`]
       ],
       "type": "string",
     },
+    "newTermsHash": {
+      "description": "Optional terms hash (up to 64 characters) to bind to the incoming owner in the same transfer.",
+      "examples": [
+        "sha256:0123456789abcdef",
+      ],
+      "maxLength": 64,
+      "type": "string",
+    },
     "resourceId": {
       "description": "The resource ID to transfer ownership of. Example: 'cm7x8y9z'",
       "examples": [
@@ -5141,6 +5149,10 @@ exports[`tool schema snapshots > mindvault_transfer_ownership > input schema 1`]
         "res-001",
       ],
       "type": "string",
+    },
+    "resetAttestation": {
+      "description": "When true, clear the resource's existing attestation hash in the same transfer so it can be re-verified.",
+      "type": "boolean",
     },
   },
   "required": [

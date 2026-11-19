@@ -313,11 +313,24 @@ Updates the on-chain price in USDC for a registered resource in the vault-regist
 ### 16. `mindvault_transfer_ownership`
 
 Transfers ownership of a registered resource on the vault-registry contract to a new creator address.
+Optionally include `newTermsHash` to bind a terms hash to the incoming owner and/or
+`resetAttestation: true` to clear the resource's attestation hash. These actions
+are atomic with the ownership transfer when the deployed contract supports the
+terms-aware transfer method; calls without these fields retain the legacy transfer path.
 
 **Input:**
 
 ```json
 { "resourceId": "abc123", "newCreator": "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH" }
+```
+
+```json
+{
+  "resourceId": "abc123",
+  "newCreator": "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+  "newTermsHash": "sha256:0123456789abcdef",
+  "resetAttestation": true
+}
 ```
 
 ---

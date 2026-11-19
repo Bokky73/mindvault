@@ -3138,9 +3138,16 @@ export async function setPrice(resourceId: string, price: string): Promise<strin
   );
 }
 
-export async function transferOwnership(resourceId: string, newCreator: string): Promise<string> {
+export async function transferOwnership(
+  resourceId: string,
+  newCreator: string,
+  newTermsHash?: string,
+  resetAttestation = false,
+): Promise<string> {
   const wallet = requireWallet();
-  if (_isMock()) return mockTransferOwnership(resourceId, newCreator);
+  if (_isMock()) {
+    return mockTransferOwnership(resourceId, newCreator, newTermsHash, resetAttestation);
+  }
 
   const client = createRegistryClient({
     contractId: REGISTRY_CONTRACT_ID,
@@ -3151,7 +3158,37 @@ export async function transferOwnership(resourceId: string, newCreator: string):
 
   let tx: Awaited<ReturnType<typeof client.transfer_ownership>>;
   try {
-    tx = await client.transfer_ownership({ id: resourceId, new_creator: newCreator });
+    if (newTermsHash !== undefined || resetAttestation) {
+      const dynamicClient = await DynamicContractClient.from({
+        contractId: REGISTRY_CONTRACT_ID,
+        rpcUrl: SOROBAN_RPC_URL,
+        networkPassphrase: REGISTRY_NETWORK_PASSPHRASE,
+        publicKey: wallet.publicKey,
+      });
+      const transferWithTerms = (
+        dynamicClient as unknown as {
+          transfer_ownership_with_terms?: (args: {
+            id: string;
+            new_creator: string;
+            new_terms_hash: string | null;
+            reset_attestation: boolean;
+          }) => Promise<typeof tx>;
+        }
+      ).transfer_ownership_with_terms;
+      if (typeof transferWithTerms !== "function") {
+        throw new Error(
+          "Configured vault-registry contract does not expose transfer_ownership_with_terms; deploy a compatible contract first.",
+        );
+      }
+      tx = await transferWithTerms.call(dynamicClient, {
+        id: resourceId,
+        new_creator: newCreator,
+        new_terms_hash: newTermsHash ?? null,
+        reset_attestation: resetAttestation,
+      });
+    } else {
+      tx = await client.transfer_ownership({ id: resourceId, new_creator: newCreator });
+    }
   } catch (err: any) {
     if (isTimeoutError(err)) {
       throw mcpError(
@@ -3219,6 +3256,9 @@ export async function transferOwnership(resourceId: string, newCreator: string):
       resourceId,
       newCreator,
       txHash,
+      ...(newTermsHash !== undefined || resetAttestation
+        ? { newTermsHash: newTermsHash ?? null, attestationReset: resetAttestation }
+        : {}),
     },
     null,
     2,
@@ -4499,6 +4539,8 @@ async function dispatchToolOutcome(
         return transferOwnership(
           requiredString(args, "resourceId"),
           requiredString(args, "newCreator"),
+          optionalString(args, "newTermsHash"),
+          flag(args, "resetAttestation"),
         );
       case "mindvault_accept_transfer":
         return acceptTransfer(requiredString(args, "resourceId"));
