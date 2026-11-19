@@ -832,12 +832,16 @@ export const TEXT_ONLY_TOOLS = [
 export const PENDING_TRANSFER_OUTPUT_SCHEMA = {
   type: "object",
   properties: {
+    source: { type: "string" },
     resourceId: { type: "string" },
-    pendingOwner: { type: ["string", "null"] },
     found: { type: "boolean" },
+    proposedNewOwner: { type: ["string", "null"] },
     message: { type: "string" },
+    contract: { type: "string" },
+    network: { type: "string" },
+    rpc: { type: "string" },
   },
-  required: ["resourceId", "found", "message"],
+  required: ["source", "resourceId", "found", "message", "contract"],
 } as const;
 
 /** Output schema for mindvault_batch_catalog_lookup. */

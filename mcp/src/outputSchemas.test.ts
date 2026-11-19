@@ -11,6 +11,7 @@ import {
   PUBLISH_BUY_OUTPUT_SCHEMA,
   PUBLISH_STATUS_OUTPUT_SCHEMA,
   PURCHASE_HISTORY_OUTPUT_SCHEMA,
+  PENDING_TRANSFER_OUTPUT_SCHEMA,
   RECOVER_CACHE_OUTPUT_SCHEMA,
   REGISTRY_INFO_OUTPUT_SCHEMA,
   CONTRACT_PREFLIGHT_OUTPUT_SCHEMA,
@@ -145,6 +146,17 @@ describe("representative payloads match advertised required keys", () => {
 
     const buy = dryRunBuy("res-001", "stellar:testnet", "https://example.com", true, "1.5");
     expect(buy.mode).toBe("dry-run");
+  });
+
+  it("pending transfer matches its required keys", () => {
+    assertKeys(PENDING_TRANSFER_OUTPUT_SCHEMA, {
+      source: "on-chain",
+      resourceId: "res-001",
+      found: true,
+      proposedNewOwner: "GABCDEF",
+      message: "A pending ownership transfer exists.",
+      contract: "C…",
+    });
   });
 
   it("attestation verification matches its required keys", () => {
