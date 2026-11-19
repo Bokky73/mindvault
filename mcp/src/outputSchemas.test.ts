@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { dryRunBuy, dryRunPublish } from "./dryRun.js";
 import {
   ATTESTATION_VERIFICATION_OUTPUT_SCHEMA,
+  BUY_OUTPUT_SCHEMA,
   CATALOG_LIST_OUTPUT_SCHEMA,
   LIST_PROFILES_OUTPUT_SCHEMA,
   PREVIEW_OUTPUT_SCHEMA,
@@ -78,6 +79,44 @@ describe("structured tools advertise a schema", () => {
 });
 
 describe("representative payloads match advertised required keys", () => {
+  it("accepts absent and partial nullable buy receipt fields", () => {
+    const result = {
+      before: null,
+      after: { id: "res-001", purchased: true },
+      changedFields: ["id", "purchased"],
+      txHash: null,
+      settlement: {
+        polled: false,
+        txHash: null,
+        status: null,
+        settled: false,
+        success: false,
+        timedOut: false,
+        attempts: 0,
+        skipped: false,
+        retryable: false,
+        message: "Settlement was not polled.",
+      },
+    };
+
+    expect(outputValidationErrors(BUY_OUTPUT_SCHEMA, result)).toEqual([]);
+    expect(
+      outputValidationErrors(BUY_OUTPUT_SCHEMA, {
+        ...result,
+        after: {
+          ...result.after,
+          receipt: {
+            paymentId: null,
+            amount: "5.00",
+            currency: null,
+            paidTo: null,
+            paidAt: null,
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("catalog list", () => {
     assertKeys(CATALOG_LIST_OUTPUT_SCHEMA, {
       items: [{ id: "mock-1", title: "Intro", price: "1.5", description: null, accessUrl: null }],

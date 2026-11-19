@@ -327,6 +327,21 @@ const BUY_SUMMARY_SCHEMA = {
   type: "object",
   properties: {
     ...MUTATION_SUMMARY_SCHEMA.properties,
+    after: {
+      type: "object",
+      properties: {
+        receipt: {
+          type: ["object", "null"],
+          properties: {
+            paymentId: { type: ["string", "null"] },
+            amount: { type: ["string", "number", "null"] },
+            currency: { type: ["string", "null"] },
+            paidTo: { type: ["string", "null"] },
+            paidAt: { type: ["string", "null"] },
+          },
+        },
+      },
+    },
     settlement: SETTLEMENT_SCHEMA,
   },
   required: [...MUTATION_SUMMARY_SCHEMA.required, "settlement"],
