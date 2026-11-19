@@ -365,7 +365,7 @@ export async function registryCount(creator?: string): Promise<string> {
 
   let count: number;
   let listedCount: number;
-  let creatorCount: number | null = null;
+  let creatorCount: number | undefined;
 
   try {
     const countTx = await client.count();
@@ -381,10 +381,7 @@ export async function registryCount(creator?: string): Promise<string> {
   }
 
   try {
-    // listed_count is present in the Rust contract but not yet included in the
-    // generated TypeScript bindings; access via `as any` until bindings are
-    // regenerated with `pnpm contract:bindings`.
-    const listedTx = await (client as any).listed_count();
+    const listedTx = await client.listed_count();
     listedCount = Number(listedTx.result);
   } catch (err: unknown) {
     throw mcpError(
@@ -398,7 +395,7 @@ export async function registryCount(creator?: string): Promise<string> {
 
   if (creator) {
     try {
-      const creatorTx = await (client as any).creator_resource_count({ creator });
+      const creatorTx = await client.creator_resource_count({ creator });
       creatorCount = Number(creatorTx.result);
     } catch (err: unknown) {
       throw mcpError(
@@ -411,28 +408,15 @@ export async function registryCount(creator?: string): Promise<string> {
     }
   }
 
-  const payload: {
-    source: string;
-    count: number;
-    listedCount: number;
-    creatorCount?: number;
-    creator?: string;
-    contract: string;
-    network: string;
-    rpc: string;
-  } = {
+  const payload = {
     source: "on-chain",
     count,
     listedCount,
+    ...(creator !== undefined && creatorCount !== undefined ? { creator, creatorCount } : {}),
     contract: REGISTRY_CONTRACT_ID,
     network: REGISTRY_NETWORK_PASSPHRASE,
     rpc: SOROBAN_RPC_URL,
   };
-
-  if (creator != null) {
-    payload.creator = creator;
-    payload.creatorCount = creatorCount!;
-  }
 
   return JSON.stringify(payload, null, 2);
 }
