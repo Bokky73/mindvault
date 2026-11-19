@@ -824,3 +824,12 @@ assert_eq!(
 cuid2 format used by the MindVault server. The following IDs are reserved and
 always rejected: `admin`, `null`, `registry`, `api`, `index`, `root`, `system`
 (case-insensitive).
+
+## Role Management Flows Summary
+
+| Role | Grant / Nominate Entrypoint | Revoke / Rotate Entrypoint | Read / Audit Query |
+| :--- | :--- | :--- | :--- |
+| `Admin` | `nominate_new_admin(new_admin)` / `accept_admin(pending)` | `cancel_admin_nomination(admin)` / `recover_admin(new_admin)` | `admin()`, `pending_admin()`, `pending_admin_expiry()` |
+| `Verifier` | `add_verifier(verifier)` / `add_verifiers(batch)` | `remove_verifier(verifier)` / `rotate_verifier(old, new)` | `is_verifier(addr)`, `list_verifiers()` |
+| `Settler` | `add_settler(settler)` / `set_payment_settler(settler)` | `remove_settler(settler)` / `rotate_payment_settler(new)` | `is_settler(addr)`, `payment_settler()` |
+| `Moderator` | `add_moderator(admin, moderator)` | `remove_moderator(admin, moderator)` | `is_moderator(addr)`, `list_moderators()` |
