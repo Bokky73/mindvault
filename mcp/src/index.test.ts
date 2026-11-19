@@ -82,7 +82,9 @@ import {
   _setAgentApiKey,
   _resetProfiles,
   _setMockMode,
+  prewarmCatalogCache,
 } from "./index.js";
+import { CORRELATION_HEADER } from "./correlation.js";
 import {
   recordCatalogSnapshot,
   recordPreviewSnapshot,
@@ -97,7 +99,9 @@ const TESTNET_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZL
 
 function mockResponse(data: unknown, ok = true, status = 200): Response {
   const responseData =
-    typeof data === "object" && data !== null && "balances" in data &&
+    typeof data === "object" &&
+    data !== null &&
+    "balances" in data &&
     Array.isArray((data as { balances?: unknown }).balances)
       ? {
           ...(data as Record<string, unknown>),
@@ -213,12 +217,15 @@ describe("prewarmCatalogCache", () => {
   });
 
   it("reports the resource count and populates the catalog cache", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(mockResponse(sampleResources)),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(mockResponse(sampleResources)));
     const result = await prewarmCatalogCache();
     expect(result).toContain("Catalog pre-warmed");
     expect(result).toContain("2 resource(s)");
+    const requestHeaders = fetchSpy.mock.calls[0]?.[1]?.headers as
+      Record<string, string> | undefined;
+    expect(requestHeaders?.[CORRELATION_HEADER]).toMatch(/^mv-[0-9a-z]+-[0-9a-z]{4}$/);
 
     // The offline fallback cache should now be warm — a subsequent transport
     // failure falls back to it rather than throwing outright.
@@ -1435,6 +1442,22 @@ describe("dry-run – publish validation", () => {
     expect(parsed.validation).toBeDefined();
     expect(parsed.intentions).toBeDefined();
     expect(parsed.steps).toBeDefined();
+  });
+
+  it("does not call the content verification endpoint during a dry run", async () => {
+    _setAgentWallet(null);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockResponse({}));
+
+    await dispatchTool("mindvault_publish", {
+      title: "Test Resource",
+      price: "5.00",
+      externalUrl: "https://example.com/data",
+      dryRun: true,
+    });
+
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/verify-content"))).toBe(
+      false,
+    );
   });
 
   it("validates title in dry-run", async () => {
