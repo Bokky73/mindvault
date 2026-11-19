@@ -109,3 +109,19 @@ pub(crate) fn compute_with_royalty(
         creator_remainder,
     })
 }
+
+/// Estimate cumulative creator net earnings and royalty payouts across `sales_count` sales.
+pub(crate) fn estimate_creator_earnings(
+    env: &Env,
+    unit_price: i128,
+    sales_count: u32,
+) -> Result<i128, Error> {
+    let preview = compute(env, unit_price)?;
+    let per_sale_creator_total = preview
+        .creator_remainder
+        .checked_add(preview.royalty_fee)
+        .ok_or(Error::PriceExceedsMax)?;
+    per_sale_creator_total
+        .checked_mul(i128::from(sales_count))
+        .ok_or(Error::PriceExceedsMax)
+}
