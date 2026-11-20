@@ -5,8 +5,8 @@ use alloc::{format, string::ToString};
 use proptest::prelude::*;
 use soroban_sdk::{
     testutils::{
-        storage::{Instance as _, Persistent as _}, Address as _, Events as _, Ledger as _,
-        MockAuth, MockAuthInvoke,
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke,
     },
     Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, TryIntoVal, Val, Vec,
 };
@@ -11539,3 +11539,5 @@ include!("test/resale_royalty.rs");
 include!("test/verifier_rotation.rs");
 include!("test/attestation_hash_memoization.rs");
 include!("test/scheduled_pause.rs");
+include!("test/top_tags.rs");
+include!("test/metadata_pointers.rs");

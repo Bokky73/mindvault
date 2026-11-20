@@ -278,7 +278,7 @@ See [`docs/adr-fee-config.md`](../docs/adr-fee-config.md) for the full design ra
 | `list_by_dispute_status(flagged, start, limit)`                              | —                                                        | `flagged: bool`; `start: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                                         | `Vec<Resource>`                        | Paginated list of resources filtered by whether `dispute_flag` is active, preserving catalog order. Each resource entry read has its TTL bumped.                                                                                                                                                         |
 | `list_by_dispute_status_page(flagged, cursor, limit)`                       | —                                                        | `flagged: bool`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                                        | `CatalogPage`                          | Paginated list of resources filtered by whether `dispute_flag` is active with `items` and `next_cursor`.                                                                                                                                                                                                  |
 | `list_by_verification_status(status, cursor, limit)`                         | —                                                        | `status: VerificationStatus`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                          | `CatalogPage`                          | Paginated catalog page filtered by verification `status` (`Pending`, `Verified`, `Rejected`, or `Revoked`), preserving catalog order and returning `items` + `next_cursor`. Each scanned index and resource entry has its TTL bumped.                                                                |
-| `top_tags(limit)`                                                            | —                                                        | `limit: u32` — capped at `TOP_TAGS_CAP` (20)                                                                                                                                                                                                        | `Vec<TagPopularity>`                   | Return the most popular tags sorted by descending use-count, capped at `limit`. Each entry is a `TagPopularity { tag, count }`. Returns an empty vec when no tags have been assigned.                                                                                                                    |
+| `top_tags(limit)`                                                            | —                                                        | `limit: u32` — capped at `TOP_TAGS_CAP` (20)                                                                                                                                                                                                        | `Vec<TagPopularity>`                   | Return up to `limit` tags ordered by descending successful-registration count, then lexicographically for ties. Each entry is `TagPopularity { tag, count }`; counters saturate at `u32::MAX` and are unchanged by `set_tags` or tombstoning.                                                           |
 | `list_by_state(state, cursor, limit)`                                        | —                                                        | `state: ResourceState` — one of `Listed`, `Delisted`, `Frozen`, `Disputed`, `Tombstoned`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                              | `CatalogPage`                          | Paginated list of resources whose lifecycle state exactly matches `state`, preserving catalog order. Unlike the boolean `listed` projection, this distinguishes all five states. Returns a `CatalogPage` with `items` and `next_cursor`. Each resource entry read has its TTL bumped.                    |
 | `get(id)`                                                                    | —                                                        | `id: String`                                                                                                                                                                                                                                         | `Result<Resource, Error>`              | Read a single resource. Errors `NotFound` if absent.                                                                                                                                                                                                                                                     |
 | `get_resource_state(id)`                                                     | —                                                        | `id: String`                                                                                                                                                                                                                                         | `Result<ResourceState, Error>`              | Read the current lifecycle state of a resource. Errors `NotFound` if absent.                                                                                                                                                                                                                                   |
@@ -1089,11 +1089,14 @@ pause, resource id, amount, `tx_hash` shape), then looks the id up:
 | Any of `resource_id`, `payer`, `amount`, or `tx_hash` different  | `ReceiptAlreadyExists`                                                  |
 
 A retry is answered from the stored receipt, so it keeps working after the
-receipt has been settled (it comes back `Settled`) or the resource's price has
-changed since. It is still a write entry point, so it returns `ContractPaused`
-while the registry is paused, retry or not. A new `receipt_id` whose `tx_hash`
-already backs another receipt errors `DuplicateTxHash`, as with
-`record_payment`.
+receipt has been settled (it comes back `Settled`), after a partial or full
+refund has been recorded (without altering refund state), after the resource's
+price has changed, after the resource has been delisted or tombstoned, or when
+submitted by a different authorized settler during facilitator failover. It is
+still a write entry point, so it returns `ContractPaused` while either the full
+registry (`set_paused`) or payment scope (`set_payments_paused`) is paused,
+retry or not. A new `receipt_id` whose `tx_hash` already backs another receipt
+errors `DuplicateTxHash`, as with `record_payment`.
 
 `record_payment` itself is unchanged: callers that want a duplicate id to be an
 error keep calling it.
@@ -1144,10 +1147,47 @@ pub struct FlagDetails {
 ```
 
 `last_moderator` is stored under `DataKey::FlagModerator(id)` and written by
-each of those three moderator calls. Rejected calls and creator writes leave it
-unchanged. Resources flagged before this key existed report `None` until a
-moderator next acts on them. Both reads error `InvalidResourceId` or `NotFound`
-like `get`, and stay available while the registry is paused.
+each of those three moderator calls, which also refresh the TTL of any attached
+`DataKey::FlagReasonHash(id)` entry so both keys stay synchronized. Rejected
+calls and creator writes leave `last_moderator` unchanged, and removing a
+moderator preserves their historical address as an audit record. Resources
+flagged before this key existed report `None` until a moderator next acts on
+them. Both reads error `InvalidResourceId` or `NotFound` like `get`, and stay
+available while the registry is paused or after a resource is tombstoned.
+
+### Multi-scheme metadata pointers
+
+To survive a single storage outage or gateway censorship, creators can attach a
+bounded set of redundant metadata pointers across schemes (such as `ipfs://`,
+`ar://`, `https://`, `http://`, `sha256:`, `sha-256:`, or `0x`) with a
+preferred-primary designation:
+
+```rust
+pub struct MetadataPointers {
+    pub pointers: Vec<String>, // 1..=MAX_METADATA_POINTERS (4) unique valid pointers
+    pub primary: u32,          // 0-based index of the preferred pointer
+}
+```
+
+- `set_metadata_pointers(id, pointers, primary)` validates every pointer with
+  the same rules as `update_metadata`, rejects empty, oversized (> 4), or
+  duplicate lists and out-of-range `primary` indices with
+  `InvalidMetadataPointers`, and mirrors `pointers[primary]` into
+  `Resource.metadata` so single-pointer readers remain fully compatible.
+- Emits `setptrs` with the stored `MetadataPointers`, plus `updmeta` whenever
+  the preferred primary pointer changed.
+- Frozen or content-hashed resources may still add or refresh mirrors as long
+  as `pointers[primary]` equals the current `Resource.metadata`; changing the
+  primary returns `MetadataFrozen`.
+- Calling `update_metadata` with a new pointer clears any stored mirror set so
+  stale mirrors are never served; a no-op `update_metadata` leaves mirrors
+  intact.
+- `get_metadata_pointers(id)` returns the stored `MetadataPointers` or falls
+  back to `[Resource.metadata]` with `primary = 0` when no mirrors are set.
+  Reads stay available while paused or after tombstoning.
+- `DataKey::MetadataPointers(id)` TTL is refreshed on `set_metadata_pointers`,
+  `get_metadata_pointers`, `extend_resource_ttl`, and any resource mutation
+  saved via `save`.
 
 ### Registry info (discovery)
 
