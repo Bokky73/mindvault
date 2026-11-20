@@ -207,7 +207,7 @@ function persistableProfiles(): Record<string, WalletProfile> {
   return out;
 }
 
-function saveState(): void {
+function saveState(): boolean {
   try {
     const state: ProfileState = {
       version: STATE_VERSION,
@@ -215,8 +215,10 @@ function saveState(): void {
       profiles: persistableProfiles(),
     };
     writeAtomically(STATE_FILE, JSON.stringify(state, null, 2), 0o600);
+    return true;
   } catch (err) {
     console.error("MindVault MCP: failed to persist state:", safeErrorMessage(err));
+    return false;
   }
 }
 

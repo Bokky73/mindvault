@@ -160,12 +160,15 @@ export async function setupWallet(profileArg?: string): Promise<string> {
 
   setActiveProfileName(target);
   activeProfile().wallet = { publicKey: integrity.publicKey, secretKey: integrity.secretKey };
-  saveState();
+  const persisted = saveState();
   return [
     `Wallet created.`,
     `Profile: ${target}`,
     `Address: ${integrity.publicKey}`,
-    `Wallet persisted to ${STATE_FILE} (mode 0600).`,
+    persisted
+      ? `Wallet persisted to ${STATE_FILE} (mode 0600).`
+      : `⚠ Wallet held in memory only — writing ${STATE_FILE} failed, so it is lost when this server stops. ` +
+        `Back it up now with mindvault_backup_state, then fix the state directory's permissions.`,
   ].join("\n");
 }
 

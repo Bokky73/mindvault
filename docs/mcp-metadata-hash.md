@@ -80,6 +80,22 @@ chars), optionally prefixed with "sha256:"/"sha512:" (or "-"); case-insensitive.
 | `mindvault_check_consistency` | `expectedMetadataHash` (optional) | Compared against the `contentHash` anchored on-chain                                             |
 | `mindvault_preview_metadata_hash` | `resourceId`                  | Reports the anchored digest (or why there is none) without a comparison — see below              |
 | `mindvault_tx_status`         | `txHash`                          | A Stellar transaction hash is a sha256 digest; normalized to bare lowercase hex for the RPC call |
+| `mindvault_update_metadata`   | `metadata`                        | HTTP(S) URL pointers are normalized via `normalizeMetadataPointer` before on-chain submission, history recording, and response output |
+
+### Pointer normalization across publish and update
+
+When a link resource is published, the server normalizes its external URL before
+hashing (`server/src/utils/crypto.ts` `hashLinkResource`): scheme and host are
+lowercased, trailing slashes on non-root paths are stripped, and query
+parameters are sorted alphabetically.
+
+`normalizeMetadataPointer` in [`mcp/src/metadataHash.ts`](../mcp/src/metadataHash.ts)
+applies the exact same normalization on the MCP update (`mindvault_update_metadata`)
+and batch-publish (`mindvault_publish_batch`) paths so equivalent HTTP(S)
+pointers — such as `https://example.com/meta.json/` and
+`https://example.com/meta.json` — produce identical on-chain values, resource
+history entries, and tool responses. Non-HTTP(S) schemes (`ipfs://`, `ar://`,
+`sha256:`, `0x…`) are trimmed and passed through unchanged.
 
 ### Verifying an anchor
 

@@ -239,7 +239,12 @@ import {
   sanitizeServiceUrl,
   SPONSORED_CREATE_PATH,
 } from "./sponsoredDiagnostics.js";
-import { describeMetadataPointerHash, parseMetadataHash } from "./metadataHash.js";
+import {
+  describeMetadataPointerHash,
+  normalizeMetadataPointer,
+  parseMetadataHash,
+} from "./metadataHash.js";
+export { normalizeMetadataPointer };
 import {
   checkWalletIntegrity,
   sponsoredWalletIntegrityError,
@@ -1051,44 +1056,6 @@ function requireWallet(): AgentWallet {
   return wallet;
 }
 
-/**
- * Normalize a metadata pointer string before writing it to the vault registry.
- *
- * HTTP(S) URL pointers are normalized the same way `hashLinkResource` on the
- * server normalizes external URLs at publish time (see
- * `server/src/utils/crypto.ts`):
- *
- *   - Lowercase scheme + host
- *   - Strip trailing slash from pathname (unless the pathname is exactly "/")
- *   - Sort query parameters alphabetically
- *
- * This ensures a pointer like `https://example.com/metadata.json/` produced by
- * an update call is identical on-chain to the `https://example.com/metadata.json`
- * form used at publish, so content-hash comparisons across the two operations
- * remain consistent.
- *
- * Non-HTTP(S) schemes (ipfs://, ar://, sha256:, 0x…) are passed through
- * unchanged — their syntax is scheme-specific and we must not mutate them.
- */
-export function normalizeMetadataPointer(pointer: string): string {
-  const trimmed = pointer.trim();
-  if (!/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  try {
-    const u = new URL(trimmed);
-    u.hostname = u.hostname.toLowerCase();
-    u.pathname = u.pathname.replace(/\/+$/, "") || "/";
-    const sorted = Array.from(u.searchParams.entries()).sort(([a], [b]) => a.localeCompare(b));
-    u.search = "";
-    sorted.forEach(([k, v]) => u.searchParams.append(k, v));
-    return u.toString();
-  } catch {
-    // Malformed URL — return as-is and let the contract validation reject it.
-    return trimmed;
-  }
-}
-
 function publisherCredential(profile: string = activeProfileName): CredentialContext {
   return { kind: "publisher_api_key", profile };
 }
@@ -1632,7 +1599,7 @@ async function repairSponsoredAccount(secretKey: string, profileArg?: string): P
 
   activeProfileName = target;
   activeProfile().wallet = { publicKey, secretKey };
-  saveState();
+  const persisted = saveState();
   return JSON.stringify(
     {
       status: "repaired",
@@ -1641,9 +1608,10 @@ async function repairSponsoredAccount(secretKey: string, profileArg?: string): P
       accountStatus: details.status,
       xlmBalance: details.xlmBalance,
       usdcBalance: details.usdcBalance,
-      persisted: true,
-      message:
-        details.status === "no-trustline"
+      persisted,
+      message: !persisted
+        ? "Wallet key restored in memory, but persisting to disk failed; back up state with mindvault_backup_state."
+        : details.status === "no-trustline"
           ? "Wallet key restored, but the sponsored account still needs a USDC trustline."
           : "Wallet key restored after confirming the sponsored account on Horizon.",
     },
@@ -1713,6 +1681,7 @@ interface WalletBalanceRow {
   profile?: string;
   active?: boolean;
   publisherRegistered?: boolean;
+  ownsAddress?: boolean;
   address: string;
   details: BalanceDetails | null;
   note: string | null;
@@ -1832,33 +1801,50 @@ async function walletBalancesOutcome(): Promise<ToolOutcome> {
     .map(([name]) => name)
     .sort();
 
+  const derivePublicKey = agentNames.length > 0 ? await stellarDerivePublicKey() : null;
+
   const agents = await Promise.all(
-    agentNames.map((name) =>
-      loadBalanceRow({
-        address: profiles[name].wallet?.publicKey ?? "",
+    agentNames.map(async (name) => {
+      const wallet = profiles[name].wallet;
+      const integrity =
+        wallet && derivePublicKey ? checkWalletIntegrity(wallet, derivePublicKey) : null;
+      const row = await loadBalanceRow({
+        address: wallet?.publicKey ?? "",
         profile: name,
         active: name === activeProfileName,
         publisherRegistered: profiles[name].apiKey != null,
-      }),
-    ),
+      });
+      if (integrity && !integrity.ok) {
+        const ownershipNote = unownedWalletNote(integrity);
+        row.ownsAddress = false;
+        row.note = row.note ? `${row.note} ${ownershipNote}` : ownershipNote;
+      } else if (integrity?.ok) {
+        row.ownsAddress = true;
+      }
+      return row;
+    }),
   );
 
   const platformAddress = PLATFORM_WALLET_ADDRESS?.trim() || null;
   const platform = platformAddress ? await loadBalanceRow({ address: platformAddress }) : null;
   const spendEstimate = await estimatePendingSpend(activeProfileName);
   const activeWallet = agents.find((row) => row.profile === activeProfileName);
+  const activeSpendableUsdc =
+    activeWallet?.ownsAddress === false ? null : (activeWallet?.details?.usdcBalance ?? null);
   const configuredAutoPayCeilingUsdc =
     process.env.MINDVAULT_MAX_AUTO_PAY_USDC?.trim() || DEFAULT_MAX_AUTO_PAY_USDC;
 
+  // Exclude unowned keystore addresses from spendable totals so a stale funded
+  // address from a half-completed sponsored creation never reads as available (#218).
+  const spendableRows = [
+    ...agents.filter((row) => row.ownsAddress !== false),
+    ...(platform ? [platform] : []),
+  ];
   const usdcTotal = sumBalances(
-    [...agents, ...(platform ? [platform] : [])]
-      .filter((row) => row.details?.usdcBalance)
-      .map((row) => row.details!.usdcBalance),
+    spendableRows.filter((row) => row.details?.usdcBalance).map((row) => row.details!.usdcBalance),
   );
   const xlmTotal = sumBalances(
-    [...agents, ...(platform ? [platform] : [])]
-      .filter((row) => row.details?.xlmBalance)
-      .map((row) => row.details!.xlmBalance),
+    spendableRows.filter((row) => row.details?.xlmBalance).map((row) => row.details!.xlmBalance),
   );
 
   const lines: Array<string | null> = ["Wallet balances", `Horizon: ${HORIZON_URL}`];
@@ -1892,7 +1878,7 @@ async function walletBalancesOutcome(): Promise<ToolOutcome> {
   }
   lines.push(`Totals (unique wallets): USDC ${usdcTotal} · XLM ${xlmTotal}`);
   lines.push(
-    `Spend summary (${activeProfileName}, ${STELLAR_NETWORK}, USDC): balance ${activeWallet?.details?.usdcBalance ?? "unavailable"}; estimated pending spend ${spendEstimate.amountUsdc ?? "unavailable"}; automatic payment ceiling ${configuredAutoPayCeilingUsdc}.`,
+    `Spend summary (${activeProfileName}, ${STELLAR_NETWORK}, USDC): balance ${activeSpendableUsdc ?? "unavailable"}; estimated pending spend ${spendEstimate.amountUsdc ?? "unavailable"}; automatic payment ceiling ${configuredAutoPayCeilingUsdc}.`,
   );
   if (spendEstimate.attemptCount > 0) {
     lines.push(
@@ -1921,7 +1907,7 @@ async function walletBalancesOutcome(): Promise<ToolOutcome> {
         profile: activeProfileName,
         network: STELLAR_NETWORK,
         asset: "USDC",
-        currentBalanceUsdc: activeWallet?.details?.usdcBalance ?? null,
+        currentBalanceUsdc: activeSpendableUsdc,
         estimatedPendingSpendUsdc: spendEstimate.amountUsdc,
         pendingPurchaseCount: spendEstimate.attemptCount,
         pricedPendingPurchaseCount: spendEstimate.pricedAttemptCount,
@@ -2449,13 +2435,16 @@ async function register(name: string, email: string, walletAddress?: string): Pr
   return `Registered as publisher.\nProfile: ${activeProfileName}\nID: ${res.data.id}\nAPI key persisted to ${STATE_FILE} (not shown). Run mindvault_reset to revoke.`;
 }
 
-async function publish(args: {
-  title: string;
-  description?: string;
-  price: string;
-  externalUrl: string;
-  dryRun?: boolean;
-}): Promise<string> {
+async function publish(
+  args: {
+    title: string;
+    description?: string;
+    price: string;
+    externalUrl: string;
+    dryRun?: boolean;
+  },
+  onProgress?: (progress: number, total?: number, message?: string) => Promise<void>,
+): Promise<string> {
   if (args.dryRun) {
     // Read live /agent/status and wallet balance for the dry run (best-effort).
     // We do NOT call the paid /verify-content endpoint in a dry run.
@@ -2490,6 +2479,7 @@ async function publish(args: {
   const snapshot = captureProfileSnapshot();
   const apiKey = snapshot.apiKey ?? requireApiKey();
 
+  await onProgress?.(1, 3, "Creating resource");
   let createRes: ApiResponse<any>;
   try {
     createRes = await jsonFetch(`${snapshot.baseUrl}/resources`, {
@@ -2530,6 +2520,7 @@ async function publish(args: {
     }
   }
 
+  await onProgress?.(2, 3, "Verifying content");
   const paidFetch = makePaidFetch(snapshot.wallet, snapshot.network);
 
   const verifyRes = await paidFetch(`${snapshot.baseUrl}/verify-content`, {
@@ -2565,6 +2556,7 @@ async function publish(args: {
       .join("\n");
   }
 
+  await onProgress?.(3, 3, "Registering on-chain");
   let registerRes: ApiResponse<any>;
   try {
     registerRes = await jsonFetch(`${BASE_URL}/resources/${resource.id}/register`, {
@@ -3439,6 +3431,9 @@ export async function setTags(resourceId: string, tags: string[]): Promise<strin
 }
 
 export async function registryLookup(resourceId: string): Promise<string> {
+  if (_isMock())
+    return mockRegistryLookup(resourceId, REGISTRY_CONTRACT_ID, currentWallet()?.publicKey);
+
   const client = createRegistryClient({
     contractId: REGISTRY_CONTRACT_ID,
     rpcUrl: SOROBAN_RPC_URL,

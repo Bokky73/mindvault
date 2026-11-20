@@ -55,10 +55,14 @@ publish would look hung right up to its result.
 The server enforces this per call with `scopeProgressToRequest` in
 [`mcp/src/progress.ts`](../mcp/src/progress.ts). Before the tool result is
 returned — success or error — the call handler waits for any notification still
-being written, then closes the scope, so an update a tool emits afterwards (a
-fire-and-forget call, or a callback that outlives the tool) is dropped instead
-of reaching the transport. Both the stdio entry point and servers built with
-[`createMindVaultServer`](mcp-server-factory.md) do this.
+being written, then closes the scope (`progress.settled === true`), so an update
+a tool emits afterwards (a fire-and-forget call, or a callback that outlives the
+tool) is dropped instead of reaching the transport. `createProgressEmitter` also
+suppresses notifications once the request's `AbortSignal` fires and degrades to
+a no-op if a transport omits `sendNotification`, while `settleTimeoutMs` lets
+callers bound how long `settle()` waits on a stalled transport. Both the stdio
+entry point and servers built with [`createMindVaultServer`](mcp-server-factory.md)
+enforce this ordering.
 
 ## Publish verification (`mindvault_publish_status`)
 
@@ -88,6 +92,8 @@ loses no information.
 
 ## Other tools that report progress
 
+- `mindvault_publish` — creating the resource, paying for and verifying content,
+  and registering on-chain (3 steps, all awaited before the tool returns).
 - `mindvault_buy` — validating the resource, submitting the x402 payment, and
   recording the purchase (4 steps).
 - `mindvault_register_onchain` — preparing, signing, and submitting the registry
