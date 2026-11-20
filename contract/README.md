@@ -224,11 +224,12 @@ its transaction evidence separately.
 - `royalty_bps ≤ MAX_FEE_BPS` (else `FeeBpsTooHigh`)
 - `platform_fee_bps + royalty_bps ≤ MAX_FEE_BPS` (else `TotalFeeTooHigh`)
 
-`validate_price` (called on every `register` / `set_price` / `set_price_many`) enforces:
+`validate_price` (called on every `register`, `register_with_hash`, `register_with_memo`, `register_batch` item, `set_price`, and `set_price_many` item) enforces the explicit reserve-price / minimum-royalty floor:
 
-- `price > platform_fee_bps + royalty_bps` (else `InvalidPrice`)
+- `price >= minimum_price_floor` where `minimum_price_floor = platform_fee_bps + royalty_bps + 1` (equivalently `price > platform_fee_bps + royalty_bps`, which also enforces `price > royalty_bps`), else `InvalidPrice`
+- When no `FeeConfig` is stored (or both rates are `0`), the floor defaults to `1` USDC base unit.
 
-This two-layer invariant — a fee ceiling in `set_fee_config` and a price floor in `validate_price` — guarantees the creator always receives a **positive** remainder of at least `MIN_CREATOR_SHARE_BPS` (50 %) on every sale.
+This two-layer invariant — a fee ceiling in `set_fee_config` and a semantic reserve-price / minimum-royalty floor in `validate_price` — prevents tiny prices from generating negative or zero-remainder splits and guarantees the creator always receives a **positive** remainder of at least `MIN_CREATOR_SHARE_BPS` (50 %) on every sale.
 The contract does **not** collect fees itself — it stores the agreed split so
 off-chain settlement (x402 facilitator, future settlement contracts) can read
 and apply it.
@@ -368,6 +369,9 @@ See [`docs/adr-fee-config.md`](../docs/adr-fee-config.md) for the full design ra
 | `get_purchase_receipt(resource_id, buyer)`                                   | —                                                        | `resource_id: String`; `buyer: Address`                                                                                                                                                                                                              | `Result<PurchaseReceiptAnchor, Error>` | Fetch a purchase receipt anchor. Errors `NotFound` if absent.                                                                                                                                                                                                                                            |
 | `get_anchor_attempts(resource_id, buyer)`                                    | —                                                        | `resource_id: String`; `buyer: Address`                                                                                                                                                                                                              | `Result<AnchorAttempts, Error>`        | Rejected `attempt_anchor_purchase_receipt` count and last-attempt ledger for the pair; both `0` when it was never rejected or its anchor has since been written.                                                                                                                                         |
 | `get_anchor_status(resource_id, buyer)` | — | `resource_id: String`; `buyer: Address` | `Result<Option<AnchorStatus>, Error>` | Anchor lifecycle status derived from existing records: `None` (no anchor activity), `Pending` (rejected attempts, retries allowed), `Confirmed` (anchor written) or `Failed` (failure recorded or attempts exhausted). Pre-existing anchors read as `Confirmed`. |
+| `record_anchor_failure(settler, resource_id, buyer, receipt_hash)` | `settler` | `settler: Address`; `resource_id: String`; `buyer: Address`; `receipt_hash: String` | `Result<(), Error>` | Durably record a `VerifierUnavailable` anchor failure for `(resource_id, buyer)` and emit `anchrfail`. Last-write-wins; clears any stale failure record if already anchored. |
+| `get_anchor_failure(resource_id, buyer)` | — | `resource_id: String`; `buyer: Address` | `Result<AnchorFailure, Error>` | Read the outstanding `AnchorFailure` record for `(resource_id, buyer)`. Errors `NotFound` when no unresolved failure exists. |
+| `retry_anchor_purchase_receipt(settler, resource_id, buyer, receipt_hash)` | `settler` | `settler: Address`; `resource_id: String`; `buyer: Address`; `receipt_hash: String` | `Result<bool, Error>` | Settler retry hook requiring `receipt_hash` to match the recorded payment's `tx_hash`. Emits `anchor` and returns `true` on success (or idempotent match); otherwise persists `AnchorFailure`, emits `anchrfail`, and returns `false`. |
 | `buy_lease(holder, resource_id, tier, amount, tx_hash)`                      | `holder`                                                 | `holder: Address`; `resource_id: String`; `tier: LeaseTier` — `Hour`, `Day`, or `Week`; `amount: i128` — must equal `lease_price(resource_id, tier)`; `tx_hash: String` — 1-128 bytes                                                                 | `Result<Lease, Error>`                 | Record a time-limited access lease in `Pending` state, to be confirmed by `settle_lease`. Requires a `Listed` resource (`ResourceNotMutable`), the exact lease price (`PaymentAmountMismatch`), and no pending or unexpired active lease for the pair (`AlreadyRegistered`). Emits `lease`.                |
 | `renew_lease(holder, resource_id, tier, amount, tx_hash)`                    | `holder`                                                 | `holder: Address`; `resource_id: String`; `tier: LeaseTier`; `amount: i128`; `tx_hash: String` — 1-128 bytes                                                                                                                         | `Result<Lease, Error>`                 | Renew the same holder/resource lease without an access gap. The stored record's resource and holder must match its key; resource ownership transfer does not change the lease binding. Emits `leasernw`.                                                                                   |
 | `record_lease(settler, holder, resource_id, tier, amount, tx_hash)`          | `settler` + `holder`                                     | `settler: Address` — holder of the settler role; then as `buy_lease`                                                                                                                                                                                 | `Result<Lease, Error>`                 | Settler-recorded lease: the same checks as `buy_lease`, written directly in `Active` state because the settler has already confirmed the payment. Emits `lease`.                                                                                                                                         |
@@ -437,6 +441,7 @@ Caller (new_admin) ──nominate_new_admin(A)──► Admin = A
 - **Auth**: `new_admin` must authorize the call (`require_auth`).
 - **Event**: `setadmin` with `new_admin`.
 - **No accept step** — the caller becomes admin immediately.
+- **Replay protection**: once `DataKey::Admin` is set, the bootstrap branch is permanently closed. Any subsequent `nominate_new_admin` requires the *stored* admin's authorization (an unauthenticated attacker is rejected by Soroban auth), replaying with the current admin fails with `SameAdmin`, and replaying `bootstrap_dual_admin` fails with `AdminAlreadySet` — leaving the stored admin, recovery admin, pending nomination, and all granted verifier/settler/moderator roles unchanged.
 
 #### Admin transfer (two-step rotation)
 
@@ -766,7 +771,7 @@ apart, so update all three together.
 | `pause_until` | `(pause_until: u64, admin: Address)`                                                   | `set_paused_until()` succeeds                              |
 | `paypause`  | `(paused: bool, admin: Address)`                                                         | `set_payments_paused()` succeeds (including no-op transitions) |
 | `anchor`    | `PurchaseReceiptAnchor { resource_id, buyer, receipt_hash, ledger }`                     | `anchor_purchase_receipt()` succeeds                       |
-| `anchrfail` | `AnchorFailure { resource_id, buyer, receipt_hash, reason, ledger }`                     | `attempt_anchor_purchase_receipt()` rejects an anchor      |
+| `anchrfail` | `AnchorFailure { resource_id, buyer, receipt_hash, reason, ledger }`                     | `attempt_anchor_purchase_receipt()`, `record_anchor_failure()`, or `retry_anchor_purchase_receipt()` reports an anchor failure |
 | `anchrxhst` | `AnchorAttempts { attempts, last_attempt_ledger } (topics carry resource_id and buyer)` | `attempt_anchor_purchase_receipt()` exhausts maximum retry attempts |
 | `lease`     | `Lease { resource_id, holder, tier, start_ledger, expiry_ledger, amount, tx_hash, state, recorded_at }` | `buy_lease()` or `record_lease()` succeeds |
 | `leasesetl` | `Lease { resource_id, holder, tier, start_ledger, expiry_ledger, amount, tx_hash, state, recorded_at }` | `settle_lease()` succeeds |
@@ -985,6 +990,16 @@ pub struct AnchorFailure {
 }
 ```
 
+Settler recovery entry points emit the exact same `(symbol_short!("anchrfail"), resource_id)` event and additionally persist the latest `AnchorFailure` under `DataKey::AnchorFailure(resource_id, buyer)` (readable by anyone via `get_anchor_failure`, and cleared automatically once an anchor is written):
+
+| Settler entry point | Rejected because | `AnchorFailureReason` |
+| --- | --- | --- |
+| `record_anchor_failure` | Verifier role unavailable or revoked | `VerifierUnavailable` |
+| `retry_anchor_purchase_receipt` | No recorded payment exists for `(resource_id, buyer)` | `NoPaymentRecorded` |
+| `retry_anchor_purchase_receipt` | `receipt_hash` empty or over 128 bytes | `InvalidReceiptHash` |
+| `retry_anchor_purchase_receipt` | `receipt_hash` differs from the recorded payment's `tx_hash` | `ReceiptHashMismatch` |
+| `retry_anchor_purchase_receipt` | Pair already anchored with a different hash | `DuplicateReceipt` |
+
 ### Time-limited access leases
 
 A lease is the on-chain half of the access-lease design: an entitlement
@@ -1073,6 +1088,18 @@ already backs another receipt errors `DuplicateTxHash`, as with
 
 `record_payment` itself is unchanged: callers that want a duplicate id to be an
 error keep calling it.
+
+**Buyer normalization and duplicate protection**: Soroban `Address` values
+normalize buyer/payer identities to canonical Stellar StrKey addresses
+(`G...`/`C...`), so round-tripping a buyer through its StrKey string resolves to
+the exact same identity for both payment receipts and purchase receipt anchors.
+Retrying an existing `receipt_id` with a different buyer (on either
+`record_payment` or `record_payment_idempotent`) fails with
+`ReceiptAlreadyExists`, writes no second payment or secondary buyer index entry
+(`PaymentIndex`, `BuyerPayments`, `BuyerResourcePayments`), does not consume the
+rejected call's `tx_hash`, and leaves the original buyer's receipt intact.
+Reusing an already-recorded `tx_hash` under a new `receipt_id` and different
+buyer fails with `DuplicateTxHash`.
 
 ### Bounded payment receipt pagination
 

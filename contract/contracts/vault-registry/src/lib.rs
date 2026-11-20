@@ -330,6 +330,9 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get_purchase_receipt", "—"),
     ("get_anchor_attempts", "—"),
     ("get_anchor_status", "—"),
+    ("record_anchor_failure", "settler"),
+    ("get_anchor_failure", "—"),
+    ("retry_anchor_purchase_receipt", "settler"),
     // ── Access leases ─────────────────────────────────────────────────────
     ("buy_lease", "holder"),
     ("renew_lease", "holder"),
@@ -4609,14 +4612,13 @@ impl VaultRegistry {
         };
         if let Some(reason) = throttled {
             let failure = AnchorFailure {
-                resource_id: resource_id.clone(),
+                resource_id,
                 buyer,
                 receipt_hash,
                 reason,
                 ledger: now,
             };
-            env.events()
-                .publish((symbol_short!("anchrfail"), resource_id), failure);
+            Self::emit_anchor_failure(&env, failure);
             return Ok(false);
         }
 
@@ -4633,8 +4635,7 @@ impl VaultRegistry {
                 reason,
                 ledger: now,
             };
-            env.events()
-                .publish((symbol_short!("anchrfail"), resource_id.clone()), failure);
+            Self::emit_anchor_failure(&env, failure);
             if attempts.attempts >= MAX_ANCHOR_ATTEMPTS {
                 // Emitted once per pair, on the attempt that reaches the cap.
                 env.events()
@@ -4787,7 +4788,7 @@ impl VaultRegistry {
         }
 
         let failure = AnchorFailure {
-            resource_id: resource_id.clone(),
+            resource_id,
             buyer,
             receipt_hash,
             reason: AnchorFailureReason::VerifierUnavailable,
@@ -4795,8 +4796,7 @@ impl VaultRegistry {
         };
         env.storage().persistent().set(&failure_key, &failure);
         Self::bump_persistent(&env, &failure_key);
-        env.events()
-            .publish((symbol_short!("anchrfail"), resource_id), failure);
+        Self::emit_anchor_failure(&env, failure);
         Ok(())
     }
 
@@ -5797,6 +5797,31 @@ impl VaultRegistry {
         Ok(())
     }
 
+    /// Compute the minimum allowed resource price in USDC base units for a
+    /// given [`FeeConfig`].
+    ///
+    /// Without an active fee config (or when both rates are zero), the floor
+    /// is `1` base unit. Otherwise the reserve floor is
+    /// `platform_fee_bps + royalty_bps + 1`, ensuring both `royalty_bps < price`
+    /// and `platform_fee_bps + royalty_bps < price` so tiny prices cannot yield
+    /// negative or zero-remainder splits.
+    pub(crate) fn min_price_for_fee_config(config: Option<&FeeConfig>) -> i128 {
+        let combined_fee_bps: i128 = config
+            .map(|c| i128::from(c.platform_fee_bps.saturating_add(c.royalty_bps)))
+            .unwrap_or(0);
+        combined_fee_bps + 1
+    }
+
+    /// Active minimum allowed resource price in USDC base units under the
+    /// currently stored [`DataKey::FeeConfig`].
+    pub(crate) fn minimum_price_floor(env: &Env) -> i128 {
+        let config = env
+            .storage()
+            .instance()
+            .get::<DataKey, FeeConfig>(&DataKey::FeeConfig);
+        Self::min_price_for_fee_config(config.as_ref())
+    }
+
     fn validate_price(env: &Env, price: i128) -> Result<(), Error> {
         if price <= 0 {
             return Err(Error::InvalidPrice);
@@ -5804,22 +5829,12 @@ impl VaultRegistry {
         if price > MAX_PRICE {
             return Err(Error::PriceExceedsMax);
         }
-        // Enforce the minimum creator-share invariant: the price in stroops must
-        // strictly exceed the *combined* fee take (platform_fee_bps +
-        // royalty_bps) so the creator always receives a positive remainder.
-        //
-        // Checking only royalty_bps (the old rule) was insufficient: a
-        // platform_fee_bps > 0 stacked on top of royalty_bps could consume the
-        // entire remaining amount, leaving the creator with zero even when
-        // royalty_bps alone was below the price.  No fee config set means no
-        // fees are owed, so the check is a no-op until one is configured.
-        let combined_fee_bps: i128 = env
-            .storage()
-            .instance()
-            .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
-            .map(|config| i128::from(config.platform_fee_bps + config.royalty_bps))
-            .unwrap_or(0);
-        if combined_fee_bps >= price {
+        // Enforce the explicit reserve-price / minimum-royalty floor: the price
+        // in USDC base units must strictly exceed the *combined* fee take
+        // (`platform_fee_bps + royalty_bps`, which also enforces
+        // `price > royalty_bps`) so the creator always receives a positive
+        // remainder. No fee config set yields a floor of 1 base unit.
+        if price < Self::minimum_price_floor(env) {
             return Err(Error::InvalidPrice);
         }
         Ok(())
@@ -6543,6 +6558,15 @@ impl VaultRegistry {
         None
     }
 
+    /// Emit the structured `anchrfail` event scoped to `failure.resource_id`.
+    /// Shared by every non-reverting anchor-failure path so topic shape and
+    /// payload stay identical across verifier and settler entry points.
+    fn emit_anchor_failure(env: &Env, failure: AnchorFailure) {
+        let resource_id = failure.resource_id.clone();
+        env.events()
+            .publish((symbol_short!("anchrfail"), resource_id), failure);
+    }
+
     /// Persist an [`AnchorFailure`] for `(resource_id, buyer)` and emit
     /// `anchrfail`, returning `Ok(false)` so callers can `return` it directly.
     /// Overwrites any earlier record: the newest reason describes the current
@@ -6557,7 +6581,7 @@ impl VaultRegistry {
     ) -> Result<bool, Error> {
         let key = DataKey::AnchorFailure(resource_id.clone(), buyer.clone());
         let failure = AnchorFailure {
-            resource_id: resource_id.clone(),
+            resource_id,
             buyer,
             receipt_hash,
             reason,
@@ -6565,8 +6589,7 @@ impl VaultRegistry {
         };
         env.storage().persistent().set(&key, &failure);
         Self::bump_persistent(env, &key);
-        env.events()
-            .publish((symbol_short!("anchrfail"), resource_id), failure);
+        Self::emit_anchor_failure(env, failure);
         Ok(false)
     }
 
