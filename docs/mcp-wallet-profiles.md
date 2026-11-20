@@ -93,6 +93,9 @@ it stores. That is checked at both boundaries where a keypair can enter:
 - `mindvault_wallet_info` re-checks the stored keypair and adds a `⚠ Keystore:`
   line — and `ownsAddress: false` in its structured output — when they disagree,
   so a balance for an unsignable address never reads as spendable funds.
+- `mindvault_wallet_balances` runs the same ownership check per profile, flags
+  any stale/unowned address in its row note, and excludes unowned addresses from
+  spendable totals and `spendSummary.currentBalanceUsdc`.
 
 `mindvault_import_wallet` first verifies a key and reports its derived address,
 profile, and configured network without writing. Persist it only in a second call
