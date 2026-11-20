@@ -315,6 +315,22 @@ stellar contract invoke \
   --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
   -- creator_resource_count \
   --creator GB6LGS25QN3DFNXKFWCTKB3FMKZFLW7OIKCX6HJKKIEPV3H2JJKBIMHV
+
+# How many of a creator's resources are currently Listed?
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  -- creator_listed_count \
+  --creator GB6LGS25QN3DFNXKFWCTKB3FMKZFLW7OIKCX6HJKKIEPV3H2JJKBIMHV
+
+# Resources by verification status (Pending, Verified, Rejected, or Revoked)
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  -- list_by_verification_status --status Pending --cursor 0 --limit 20
+
+# Chronological status-change history recorded by a verifier
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  -- get_verifier_status_history --verifier GDVERIFIER... --cursor 0 --limit 20
 ```
 
 ### Writing (requires a funded identity and network fees)
@@ -405,12 +421,27 @@ The very first `nominate_new_admin` call bootstraps the admin directly
 current admin to sign and the nominee must call `accept_admin`.
 
 ```bash
-# Bootstrap the initial admin (first-ever call — signed by new_admin)
+# Bootstrap the initial admin (single-key path — signed by new_admin)
 stellar contract invoke \
   --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
   --source platform-admin \
   -- nominate_new_admin \
   --new-admin $(stellar keys address platform-admin)
+
+# Optional 2-of-2 dual-key bootstrap (signed by BOTH admin and recovery-admin)
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  --source platform-admin \
+  -- bootstrap_dual_admin \
+  --admin $(stellar keys address platform-admin) \
+  --recovery-admin $(stellar keys address recovery-admin)
+
+# Transfer admin immediately if the primary admin key is lost (signed by recovery-admin)
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  --source recovery-admin \
+  -- recover_admin \
+  --new-admin GDNEWADMIN...
 
 # Rotate admin — nominate a successor (signed by current admin)
 stellar contract invoke \
@@ -570,9 +601,26 @@ const byTagTx = await registry.list_by_tag({
   limit: 20,
 });
 
-// How many resources does a creator currently own?
+// How many resources does a creator currently own, and how many are Listed?
 const countByCreatorTx = await registry.creator_resource_count({
   creator: "GB6LGS25QN3DFNXKFWCTKB3FMKZFLW7OIKCX6HJKKIEPV3H2JJKBIMHV",
+});
+const listedByCreatorTx = await registry.creator_listed_count({
+  creator: "GB6LGS25QN3DFNXKFWCTKB3FMKZFLW7OIKCX6HJKKIEPV3H2JJKBIMHV",
+});
+
+// Resources filtered by verification status (Pending / Verified / Rejected / Revoked)
+const pendingPageTx = await registry.list_by_verification_status({
+  status: { tag: "Pending", values: undefined },
+  cursor: 0,
+  limit: 20,
+});
+
+// Per-verifier chronological verification history
+const verifierHistoryTx = await registry.get_verifier_status_history({
+  verifier: "GDVERIFIER...",
+  cursor: 0,
+  limit: 20,
 });
 ```
 
@@ -719,6 +767,11 @@ let by_creator = client.list_by_creator(&creator, &0u32, &20u32);
 let by_tag = client.list_by_tag(&String::from_str(&env, "dataset"), &0u32, &20u32);
 
 let count = client.creator_resource_count(&creator);
+let listed_count = client.creator_listed_count(&creator);
+
+// Paginated verification status reads
+let verified_page = client.list_by_verification_status(&VerificationStatus::Verified, &0u32, &20u32);
+let history_page = client.get_verifier_status_history(&verifier, &0u32, &20u32);
 ```
 
 ### Ownership transfer
