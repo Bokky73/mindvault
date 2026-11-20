@@ -509,7 +509,50 @@ exports[`tool schema snapshots > mindvault_buy > output schema 1`] = `
     {
       "description": "mindvault_buy result: the purchase diff plus a settlement-confirmation block describing how far the payment transaction got before returning.",
       "properties": {
-        "after": {},
+        "after": {
+          "properties": {
+            "receipt": {
+              "properties": {
+                "amount": {
+                  "type": [
+                    "string",
+                    "number",
+                    "null",
+                  ],
+                },
+                "currency": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "paidAt": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "paidTo": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "paymentId": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+              },
+              "type": [
+                "object",
+                "null",
+              ],
+            },
+          },
+          "type": "object",
+        },
         "before": {},
         "changedFields": {
           "items": {
