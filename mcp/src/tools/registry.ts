@@ -192,7 +192,9 @@ export async function getAccountBalances(
   );
   const native = balances.find((b) => b.asset_type === "native");
   const normalizedUsdc =
-    usdc?.balance != null ? normalizeUsdcBalance({ source: "horizon", balance: usdc.balance }) : null;
+    usdc?.balance != null
+      ? normalizeUsdcBalance({ source: "horizon", balance: usdc.balance })
+      : null;
   return { usdc: normalizedUsdc ?? "0", native: native?.balance ?? "0", funded: true };
 }
 

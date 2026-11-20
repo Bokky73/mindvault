@@ -119,8 +119,16 @@ describe("normalizeUsdcBalance", () => {
   });
 
   it("rescales 6-decimal Soroban USDC units to match Horizon's 7-decimal stroops without a 10x error", () => {
-    const fromSoroban6 = normalizeUsdcBalance({ source: "soroban", stroops: 12_500_000n, decimals: 6 });
-    const fromSoroban7 = normalizeUsdcBalance({ source: "soroban", stroops: 125_000_000n, decimals: 7 });
+    const fromSoroban6 = normalizeUsdcBalance({
+      source: "soroban",
+      stroops: 12_500_000n,
+      decimals: 6,
+    });
+    const fromSoroban7 = normalizeUsdcBalance({
+      source: "soroban",
+      stroops: 125_000_000n,
+      decimals: 7,
+    });
     const fromHorizon = normalizeUsdcBalance({ source: "horizon", balance: "12.5000000" });
 
     expect(fromSoroban6).toBe("12.5000000");

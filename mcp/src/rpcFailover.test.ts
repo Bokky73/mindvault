@@ -494,7 +494,9 @@ describe("RpcFailover – Horizon balance fallback unit normalization (#219)", (
     const fromHorizon = await failing.runBalanceWithHorizonFallback({
       readSoroban: vi
         .fn()
-        .mockRejectedValue(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })),
+        .mockRejectedValue(
+          Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+        ),
       horizonEndpoint: HORIZON,
       readHorizon: vi.fn().mockResolvedValue({ balance: "25.0000000" }),
     });

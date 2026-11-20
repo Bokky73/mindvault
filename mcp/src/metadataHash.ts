@@ -54,11 +54,7 @@ export interface ParsedMetadataHash {
 
 /** Why a value was rejected. Stable identifiers, safe to branch on. */
 export type MetadataHashErrorCode =
-  | "not_a_string"
-  | "empty"
-  | "unknown_algorithm"
-  | "invalid_characters"
-  | "invalid_length";
+  "not_a_string" | "empty" | "unknown_algorithm" | "invalid_characters" | "invalid_length";
 
 export class MetadataHashError extends Error {
   readonly code: MetadataHashErrorCode;
