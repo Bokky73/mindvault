@@ -394,7 +394,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "mindvault_publish",
     description:
-      "Publish a link resource to the MindVault catalog. The resource undergoes AI verification (agent wallet pays ~$0.10 USDC via x402) and is automatically registered on-chain if verified. Returns resource ID, access URL, verification result, and on-chain registration status. Pass dryRun: true to validate inputs without submitting payment.",
+      "Publish a link resource to the MindVault catalog. The resource undergoes AI verification (agent wallet pays ~$0.10 USDC via x402) and is automatically registered on-chain if verified. Returns resource ID, access URL, verification result, and on-chain registration status. Pass dryRun: true to validate inputs without creating a resource, calling /verify-content, or submitting payment; it may make free status and balance reads.",
     inputSchema: {
       type: "object",
       properties: {
@@ -426,7 +426,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         dryRun: {
           type: "boolean",
           description:
-            "Optional dry-run flag. When true, validates inputs and shows intended network, endpoint, and required wallet state without submitting payment or transactions.",
+            "Optional dry-run flag. When true, validates inputs and shows intended network, endpoint, and required wallet state without creating a resource, calling /verify-content, submitting payment, or writing transactions.",
         },
         confirmMainnet: {
           type: "boolean",

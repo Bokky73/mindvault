@@ -147,7 +147,7 @@ import {
 } from "./resourceSubscriptionTool.js";
 import { type ApiResponse } from "./apiResponse.js";
 import { safeErrorMessage, safeLog } from "./redaction.js";
-import { correlationHeaders } from "./correlation.js";
+import { correlationHeaders, currentCorrelationId, withNewCorrelationId } from "./correlation.js";
 import {
   assertAutoPaymentWithinCeiling,
   assertTransactionFeeWithinCeiling,
@@ -719,7 +719,7 @@ async function registryHealth(): Promise<string> {
 // browse at MCP startup (and on demand via mindvault_prewarm_catalog) so that
 // if the API is unreachable early in a session, the fallback it serves is a
 // fresh one rather than none at all.
-export async function prewarmCatalogCache(): Promise<string> {
+async function prewarmCatalogCacheInContext(): Promise<string> {
   const startedAt = Date.now();
   try {
     const url = `${BASE_URL}/resources`;
@@ -751,6 +751,11 @@ export async function prewarmCatalogCache(): Promise<string> {
   } catch (err) {
     return `Catalog pre-warm failed: ${safeErrorMessage(err)}`;
   }
+}
+
+export async function prewarmCatalogCache(): Promise<string> {
+  if (currentCorrelationId()) return prewarmCatalogCacheInContext();
+  return withNewCorrelationId(() => prewarmCatalogCacheInContext());
 }
 
 // ── #878: Mainnet session banner ─────────────────────────────────────────────
