@@ -468,8 +468,6 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
     ("setptrs", "MetadataPointers { pointers, primary }"),
     ("nomadmin", "RoleRotation { actor, previous, replacement }"),
     ("accadmin", "RoleRotation { actor, previous, replacement }"),
-    ("nomadmin", "new_admin: Address"),
-    ("accadmin", "new_admin: Address"),
     ("nomcancel", "cancelled_nominee: Address"),
     ("netinit", "network_id: BytesN<32>"),
     ("freeze", "()"),
@@ -2655,36 +2653,14 @@ impl VaultRegistry {
         CatalogPage { items, next_cursor }
     }
 
-    /// Paginated list of resources whose `listed` flag is true, in insertion order.
+    /// Paginated list of resources whose `state` is `ResourceState::Listed`, in insertion order.
     ///
     /// - Resources are ordered by registration sequence.
     /// - `limit` is capped at `20`.
-    /// - Delisted resources are skipped; relisted resources will reappear.
+    /// - Delisted, frozen, disputed, and tombstoned resources are skipped; relisted resources will reappear.
     /// - Returns an empty `Vec` if no listed resources fall in range.
     pub fn list_listed(env: Env, start: u32, limit: u32) -> Vec<Resource> {
-        let total: u32 = env.storage().instance().get(&DataKey::Count).unwrap_or(0);
-        let page_size = limit.min(LIST_PAGE_CAP);
-        let mut result: Vec<Resource> = Vec::new(&env);
-        let mut i = start;
-        while i < total && result.len() < page_size {
-            let idx_key = DataKey::Index(i);
-            if let Some(id) = env.storage().persistent().get::<DataKey, String>(&idx_key) {
-                Self::bump_persistent(&env, &idx_key);
-                let res_key = DataKey::Resource(id);
-                if let Some(resource) = env
-                    .storage()
-                    .persistent()
-                    .get::<DataKey, Resource>(&res_key)
-                {
-                    Self::bump_persistent(&env, &res_key);
-                    if resource.state == ResourceState::Listed {
-                        result.push_back(resource);
-                    }
-                }
-            }
-            i += 1;
-        }
-        result
+        Self::list_listed_page(env, start, limit).items
     }
 
     /// Paginated listing of resources owned by `creator` in insertion order.
@@ -2839,43 +2815,22 @@ impl VaultRegistry {
         result
     }
 
-    /// Paginated list of resources filtered by verification status.
+    /// Paginated list of resources filtered by verification status
+    /// (`Pending`, `Verified`, `Rejected`, or `Revoked`).
     ///
-    /// Returns resources whose `verified` field matches `status`.
-    /// `cursor` is a global catalog index (same semantics as `list_page`).
-    /// `limit` is capped at 20.
-    /// Returns a `CatalogPage` with `items` (matching resources) and
-    /// `next_cursor` (next catalog position, or `None` at end-of-list).
+    /// Returns resources whose `verified` field matches `status` in catalog
+    /// registration order. `cursor` is a 0-based global catalog index (same
+    /// domain as `list_page`), `limit` is capped at [`LIST_PAGE_CAP`] (20),
+    /// and `next_cursor` is `Some(next_index)` when unscanned slots remain or
+    /// `None` at end-of-list. See `docs/verifier-status-pagination-design.md`
+    /// and [`Self::get_verifier_status_history`].
     pub fn list_by_verification_status(
         env: Env,
         status: VerificationStatus,
         cursor: u32,
         limit: u32,
     ) -> CatalogPage {
-        let total: u32 = env.storage().instance().get(&DataKey::Count).unwrap_or(0);
-        let page_size = limit.min(LIST_PAGE_CAP);
-        let mut items: Vec<Resource> = Vec::new(&env);
-        let mut i = cursor;
-        while i < total && items.len() < page_size {
-            let idx_key = DataKey::Index(i);
-            if let Some(id) = env.storage().persistent().get::<DataKey, String>(&idx_key) {
-                Self::bump_persistent(&env, &idx_key);
-                let res_key = DataKey::Resource(id);
-                if let Some(resource) = env
-                    .storage()
-                    .persistent()
-                    .get::<DataKey, Resource>(&res_key)
-                {
-                    Self::bump_persistent(&env, &res_key);
-                    if resource.verified == status {
-                        items.push_back(resource);
-                    }
-                }
-            }
-            i += 1;
-        }
-        let next_cursor = if i < total { Some(i) } else { None };
-        CatalogPage { items, next_cursor }
+        Self::scan_catalog(&env, cursor, limit, |resource| resource.verified == status)
     }
 
     /// `list_listed` with next-cursor metadata: `cursor` and `next_cursor`
@@ -2997,6 +2952,11 @@ impl VaultRegistry {
                 .persistent()
                 .get(&DataKey::Resource(id.clone()))
                 .unwrap(); // already validated above
+            // Tombstoned resources are permanently purged from derived listing
+            // indexes and must never be re-added by a tag index repair.
+            if resource.state == ResourceState::Tombstoned {
+                continue;
+            }
             for j in 0..resource.tags.len() {
                 let raw_tag = resource.tags.get(j).unwrap();
                 let tag = Self::normalize_tag(&env, &raw_tag);
@@ -3316,6 +3276,14 @@ impl VaultRegistry {
         if new_admin == stored_admin {
             return Err(Error::SameAdmin);
         }
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RecoveryAdmin)
+            == Some(new_admin.clone())
+        {
+            return Err(Error::SameAdmin);
+        }
         if let Some(expiry) = env
             .storage()
             .instance()
@@ -3487,11 +3455,28 @@ impl VaultRegistry {
         let previous_recovery: Option<Address> =
             env.storage().instance().get(&DataKey::RecoveryAdmin);
         match &recovery_admin {
-            Some(recovery) if *recovery == admin => return Err(Error::SameAdmin),
-            Some(recovery) => env
-                .storage()
-                .instance()
-                .set(&DataKey::RecoveryAdmin, recovery),
+            Some(recovery) => {
+                if *recovery == admin {
+                    return Err(Error::SameAdmin);
+                }
+                if let Some(pending) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, Address>(&DataKey::PendingAdmin)
+                {
+                    let expiry: u32 = env
+                        .storage()
+                        .instance()
+                        .get::<DataKey, u32>(&DataKey::PendingAdminExpiry)
+                        .unwrap_or(0);
+                    if pending == *recovery && env.ledger().sequence() < expiry {
+                        return Err(Error::SameAdmin);
+                    }
+                }
+                env.storage()
+                    .instance()
+                    .set(&DataKey::RecoveryAdmin, recovery);
+            }
             None => env.storage().instance().remove(&DataKey::RecoveryAdmin),
         }
         Self::bump_instance(&env);
@@ -3518,14 +3503,14 @@ impl VaultRegistry {
             .ok_or(Error::RecoveryAdminNotSet)?;
         recovery.require_auth();
         let old_admin = Self::require_admin(&env)?;
-        if new_admin == old_admin || new_admin == recovery {
-            return Err(Error::SameAdmin);
-        }
         recovery_target_check::ensure_valid_recovery_target(&env, &new_admin, &old_admin, &recovery)?;
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminExpiry);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminNominatedAt);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Self::bump_instance(&env);
         role_events::publish_rotation(
@@ -6207,6 +6192,7 @@ impl VaultRegistry {
                 .expect("listed count underflow")
         };
         env.storage().instance().set(&DataKey::ListedCount, &next);
+        Self::bump_instance(env);
     }
 
     fn require_current_admin(env: &Env, admin: &Address) -> Result<(), Error> {
@@ -6397,6 +6383,7 @@ impl VaultRegistry {
     }
 
     fn remove_from_creator_index(env: &Env, creator: &Address, id: &String) {
+        let key = Self::creator_key(env, creator);
         let list = Self::creator_list(env, creator);
         let mut out: Vec<String> = Vec::new(env);
         for i in 0..list.len() {
@@ -6405,10 +6392,14 @@ impl VaultRegistry {
                 out.push_back(v);
             }
         }
-        env.storage()
-            .persistent()
-            .set(&Self::creator_key(env, creator), &out);
-        Self::bump_persistent(env, &Self::creator_key(env, creator));
+        if out.is_empty() {
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+            }
+        } else {
+            env.storage().persistent().set(&key, &out);
+            Self::bump_persistent(env, &key);
+        }
     }
 
     /// Move a resource id from `previous_owner`'s index/count to `new_owner`'s,

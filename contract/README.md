@@ -277,7 +277,7 @@ See [`docs/adr-fee-config.md`](../docs/adr-fee-config.md) for the full design ra
 | `list_by_tag_page(tag, cursor, limit)`                                       | —                                                        | `tag: String` (normalized to lowercase); `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                               | `CatalogPage`                          | Paginated list of resources carrying `tag` with `items` and `next_cursor`.                                                                                                                                                                                                                               |
 | `list_by_dispute_status(flagged, start, limit)`                              | —                                                        | `flagged: bool`; `start: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                                         | `Vec<Resource>`                        | Paginated list of resources filtered by whether `dispute_flag` is active, preserving catalog order. Each resource entry read has its TTL bumped.                                                                                                                                                         |
 | `list_by_dispute_status_page(flagged, cursor, limit)`                       | —                                                        | `flagged: bool`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                                        | `CatalogPage`                          | Paginated list of resources filtered by whether `dispute_flag` is active with `items` and `next_cursor`.                                                                                                                                                                                                  |
-| `list_by_verification_status(status, start, limit)`                          | —                                                        | `status: VerificationStatus`; `start: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                           | `Vec<Resource>`                        | Paginated list of resources filtered by verification `status` (pending/verified/rejected), preserving catalog order. Each resource entry read has its TTL bumped.                                                                                                                                        |
+| `list_by_verification_status(status, cursor, limit)`                         | —                                                        | `status: VerificationStatus`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                                                                                          | `CatalogPage`                          | Paginated catalog page filtered by verification `status` (`Pending`, `Verified`, `Rejected`, or `Revoked`), preserving catalog order and returning `items` + `next_cursor`. Each scanned index and resource entry has its TTL bumped.                                                                |
 | `top_tags(limit)`                                                            | —                                                        | `limit: u32` — capped at `TOP_TAGS_CAP` (20)                                                                                                                                                                                                        | `Vec<TagPopularity>`                   | Return the most popular tags sorted by descending use-count, capped at `limit`. Each entry is a `TagPopularity { tag, count }`. Returns an empty vec when no tags have been assigned.                                                                                                                    |
 | `list_by_state(state, cursor, limit)`                                        | —                                                        | `state: ResourceState` — one of `Listed`, `Delisted`, `Frozen`, `Disputed`, `Tombstoned`; `cursor: u32`; `limit: u32` — capped at `LIST_PAGE_CAP` (20)                                                                                              | `CatalogPage`                          | Paginated list of resources whose lifecycle state exactly matches `state`, preserving catalog order. Unlike the boolean `listed` projection, this distinguishes all five states. Returns a `CatalogPage` with `items` and `next_cursor`. Each resource entry read has its TTL bumped.                    |
 | `get(id)`                                                                    | —                                                        | `id: String`                                                                                                                                                                                                                                         | `Result<Resource, Error>`              | Read a single resource. Errors `NotFound` if absent.                                                                                                                                                                                                                                                     |
@@ -472,10 +472,14 @@ Admin + Recovery ──bootstrap_dual_admin(A, R)──► Admin = A, RecoveryAd
 Recovery         ──recover_admin(B)────────────► Admin = B (pending nomination cleared)
 ```
 
-- Both keys must authorize the bootstrap and must differ. Only valid before any
+- Both keys must authorize the bootstrap (2-of-2) and must differ (`SameAdmin`). Only valid before any
   admin is set (`AdminAlreadySet`).
+- Role separation stays enforced after bootstrap: `nominate_new_admin` rejects the active
+  `recovery_admin` (`SameAdmin`), and `set_recovery_admin` rejects a live `pending_admin` (`SameAdmin`).
+- `recover_admin` transfers admin authority immediately (even while paused) and clears all pending
+  nomination state (`PendingAdmin`, `PendingAdminExpiry`, `PendingAdminNominatedAt`).
 - The admin can later change or clear the recovery key with
-  `set_recovery_admin`. Emits `setrecov`; recovery emits `recover`.
+  `set_recovery_admin`. Emits `setrecov`; recovery emits `recover` (see `docs/admin-recovery-target-rules.md`).
 
 #### Verifier grant and revoke
 
@@ -553,12 +557,14 @@ Verifier --set_verification_status(id, V, status, attestation_hash)--> Resource.
 
 ### Verifier status query pagination design
 
-The on-chain registry currently exposes `list`, `list_page`, `list_listed`,
-and `list_by_creator` for paginated resource queries. A verifier status filter
-is a natural addition to let agents and indexers efficiently find resources in
-a specific verification state (e.g. all `Pending` resources awaiting review).
+The on-chain registry provides paginated verification reads for both catalog
+filtering (`list_by_verification_status`) and per-verifier audit history
+(`get_verifier_status_history`), plus verifier role membership
+(`list_role_members(RoleKind::Verifier, ...)`). See
+[`docs/verifier-status-pagination-design.md`](../docs/verifier-status-pagination-design.md)
+for the complete specification.
 
-#### Proposed interface
+#### Interface
 
 ```rust
 /// Paginated list of resources whose `verified` field matches `status`.
@@ -570,26 +576,27 @@ pub fn list_by_verification_status(
 ) -> CatalogPage
 ```
 
-- **status**: `Pending`, `Verified`, or `Rejected`.
-- **cursor**: 0-based catalog index (same semantics as `list_page`).
-- **limit**: page size, capped at 20.
+- **status**: `Pending`, `Verified`, `Rejected`, or `Revoked`.
+- **cursor**: 0-based global catalog index (same semantics as `list_page`).
+- **limit**: page size, capped at `LIST_PAGE_CAP` (20).
 - **Returns**: `CatalogPage { items, next_cursor }`.
 
 #### Design rationale
 
-1. **Mirrors existing pagination pattern** — uses the same cursor/limit
-   contract as `list_page` and `list_by_creator`, so clients already know how
-   to paginate.
-2. **No new storage** — the filter is applied at read time by scanning the
-   index. The index already stores all registered resource ids in insertion
-   order; verification status is read from each `Resource` entry. For the
-   current registry size (<10k resources), a linear scan is acceptable.
-3. **If scale demands it** — a secondary index keyed by `(VerificationStatus, u32)`
-   can be introduced later without changing the public API, only the
-   internal implementation. The `CatalogPage` return type stays the same.
-4. **Three-valued filter** — exposing `Pending` is important for verifiers
-   who want a review queue. `Verified` and `Rejected` help auditors and
-   consumers verify the provenance of listed resources.
+1. **Mirrors existing pagination pattern** — delegates to the shared
+   `scan_catalog` helper used by `list_listed_page` and
+   `list_by_dispute_status_page`, so clients use one consistent cursor/limit
+   contract.
+2. **No new storage** — the filter is applied at read time over the append-only
+   `Index(0..Count)` slots. Each scanned index and resource entry has its TTL
+   bumped, and slot-based cursors never skip or repeat entries when a resource's
+   status changes between pages.
+3. **If scale demands it** — an internal secondary index under `AuxKey` can be
+   introduced later without changing the public ABI or `CatalogPage` return type.
+4. **Four-valued filter + per-verifier audit log** — `Pending` powers verifier
+   review queues; `Verified`, `Rejected`, and `Revoked` support provenance and
+   revocation sweeps; `get_verifier_status_history(verifier, cursor, limit)`
+   pages a verifier's own chronological status changes (`VerifierStatusPage`).
 
 #### Implementation notes
 
@@ -749,12 +756,12 @@ apart, so update all three together.
 | `emdelist` | `EmergencyDelistEvent { id, admin, reason }`                                             | `emergency_delist()` succeeds                             |
 | `setterms`  | `terms_hash: String`                                                                     | `set_terms_hash()` succeeds                                |
 | `setregt`   | `terms_hash: String`                                                                     | `set_registry_terms_hash()` succeeds                       |
-| `setadmin`  | `new_admin: Address`                                                                     | The first (bootstrap) `nominate_new_admin()` call succeeds |
-| `setrecov` | `recovery_admin: Option<Address>` | `bootstrap_dual_admin()` or `set_recovery_admin()` succeeds |
-| `recover` | `(old_admin: Address, new_admin: Address)` | `recover_admin()` succeeds |
+| `setadmin`  | `RoleRotation { actor, previous, replacement }`                                          | First `nominate_new_admin()` or `bootstrap_dual_admin()` succeeds |
+| `setrecov`  | `RoleRotation { actor, previous, replacement }`                                          | `bootstrap_dual_admin()` or `set_recovery_admin()` succeeds |
+| `recover`   | `RoleRotation { actor, previous, replacement }`                                          | `recover_admin()` succeeds |
 | `setptrs` | `MetadataPointers { pointers, primary }` (topic carries resource id) | `set_metadata_pointers()` succeeds |
-| `nomadmin`  | `new_admin: Address`                                                                     | A subsequent `nominate_new_admin()` call succeeds          |
-| `accadmin`  | `new_admin: Address`                                                                     | `accept_admin()` succeeds                                  |
+| `nomadmin`  | `RoleRotation { actor, previous, replacement }`                                          | A subsequent `nominate_new_admin()` call succeeds          |
+| `accadmin`  | `RoleRotation { actor, previous, replacement }`                                          | `accept_admin()` succeeds                                  |
 | `nomcancel` | `cancelled_nominee: Address` | `cancel_admin_nomination()` succeeds |
 | `netinit`   | `network_id: BytesN<32>`                                                                 | `initialize_network()` succeeds                            |
 | `freeze`    | `()`                                                                                     | `freeze_metadata()` succeeds                               |
@@ -872,9 +879,11 @@ listing index the contract can prune in bounded gas:
 
 | Index                               | On tombstone | Effect                                                                     |
 | ----------------------------------- | ------------ | -------------------------------------------------------------------------- |
-| `TagIndex(tag)`                     | purged       | Drops out of `list_by_tag`.                                                |
-| `CreatorResources` / `CreatorCount` | purged       | Drops out of `list_by_creator`; `creator_resource_count` decrements.       |
+| `TagIndex(tag)`                     | purged       | Drops out of `list_by_tag`/`list_by_tag_page`; empty tag entry removed; `repair_tag_index` skips tombstoned resources. |
+| `CreatorResources` / `CreatorCount` | purged       | Drops out of `list_by_creator`/`list_by_creator_page`; empty creator entry removed; `creator_resource_count` decrements. |
+| `ListedCount`                       | decremented  | Only when the resource was `Listed`; `listed_count` drops by one and resource drops out of `list_listed`/`list_listed_page`. |
 | `CreatorListedCount`                | decremented  | Only when the resource was `Listed`; `creator_listed_count` drops by one.  |
+| `PendingTransfer(id)`               | removed      | Cancels any in-flight `propose_transfer` so `accept_transfer` cannot resurrect the resource. |
 | `MemoHash(id)`                      | untouched    | `get_memo_hash` keeps returning the registration memo hash for audit.      |
 | `Index(u32)` / `Count`              | untouched    | `count()` stays monotonic and `list`/`list_page` remain a full audit view. |
 | `Resource(id)`                      | untouched    | Still readable through `get` for audit purposes.                           |
