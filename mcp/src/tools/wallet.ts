@@ -28,11 +28,11 @@ import {
 } from "../sponsoredWallet.js";
 import {
   buildPublishStatusSnapshot,
+  fetchPublishStatusPair,
   normalizeIntervalMs,
   normalizeTimeoutMs,
   normalizeWaitFlag,
   pollPublishStatus,
-  publishStatusFromResponses,
   type PublishProgressReporter,
   type PublishStatusFetch,
 } from "../publishStatus.js";
@@ -199,9 +199,11 @@ export async function walletInfo(): Promise<string> {
 }
 
 async function fetchPublishStatusData(resourceId: string): Promise<PublishStatusFetch> {
-  const metaRes = await jsonFetch(`${BASE_URL}/resources/${resourceId}/meta`);
-  const verRes = await jsonFetch(`${BASE_URL}/resources/${resourceId}/verification`);
-  return publishStatusFromResponses(resourceId, metaRes, verRes);
+  return fetchPublishStatusPair(
+    resourceId,
+    () => jsonFetch(`${BASE_URL}/resources/${resourceId}/meta`),
+    () => jsonFetch(`${BASE_URL}/resources/${resourceId}/verification`),
+  );
 }
 
 function sleepMs(ms: number): Promise<void> {

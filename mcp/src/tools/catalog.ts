@@ -1,4 +1,12 @@
-import { BASE_URL, jsonFetch } from "../runtime.js";
+import {
+  BASE_URL,
+  jsonFetch,
+  jsonFetchOnce,
+  logRetry,
+  RETRY_POLICY,
+  SERVICE_OPERATION,
+  sourceForUrl,
+} from "../runtime.js";
 import {
   applyCatalogSort,
   applyClientCatalogFilters,
@@ -10,15 +18,20 @@ import {
   catalogCacheLabel,
   getCatalogSnapshot,
   getPreviewSnapshot,
-  recordCatalogSnapshot,
   recordPreviewSnapshot,
+  revalidateCatalogCache,
   type CatalogFallbackReason,
 } from "../catalogCache.js";
 import { currentCatalogCacheScope } from "../catalogCacheScope.js";
 import { isRetryableStatus } from "../retry.js";
-import { mappedErrorOf } from "../errorMapping.js";
+import {
+  mapHttpError,
+  mapTransportError,
+  mappedErrorOf,
+  mcpError,
+  throwHttpError,
+} from "../errorMapping.js";
 import { cacheStalenessNotice } from "../cacheStaleness.js";
-import { mapHttpError, mcpError, throwHttpError } from "../errorMapping.js";
 import { truncateResponse } from "../truncation.js";
 import { applyPreviewLimits, serializePreview } from "../previewLimits.js";
 import { formatResource } from "./registry.js";
@@ -52,17 +65,27 @@ function catalogFallbackFor(err: unknown): CatalogFallbackReason | null {
 }
 
 async function fetchCatalog(url: string, operation: string, scope: string): Promise<CatalogLoad> {
-  try {
-    const res = await jsonFetch(url);
-    if (!res.ok) {
-      throw mcpError(
-        mapHttpError({ operation, source: "api", status: res.status, data: res.data }),
-      );
-    }
-    const items = Array.isArray(res.data) ? res.data : [];
-    recordCatalogSnapshot(items, scope);
-    return { items, notice: cacheStalenessNotice(res.headers), fromCache: false };
-  } catch (err) {
+  const result = await revalidateCatalogCache({
+    fetcher: () => jsonFetchOnce(url),
+    policy: RETRY_POLICY,
+    label: `GET ${new URL(url).pathname}`,
+    scope,
+    onRetry: logRetry,
+  });
+
+  if (result.revalidated) {
+    return {
+      items: result.resources,
+      notice: cacheStalenessNotice(result.response.headers),
+      fromCache: false,
+    };
+  }
+
+  if (result.error !== undefined) {
+    const source = sourceForUrl(url);
+    const err = mcpError(
+      mapTransportError({ operation: SERVICE_OPERATION[source], source, error: result.error }),
+    );
     const reason = catalogFallbackFor(err);
     const snapshot = reason ? getCatalogSnapshot(Date.now(), scope) : null;
     if (!snapshot || !reason) throw err;
@@ -72,6 +95,19 @@ async function fetchCatalog(url: string, operation: string, scope: string): Prom
       fromCache: true,
     };
   }
+
+  const res = result.response!;
+  const err = mcpError(
+    mapHttpError({ operation, source: "api", status: res.status, data: res.data }),
+  );
+  if (result.snapshot && result.reason) {
+    return {
+      items: Array.isArray(result.snapshot.resources) ? (result.snapshot.resources as any[]) : [],
+      notice: catalogCacheLabel(result.snapshot.savedAtMs, Date.now(), result.reason),
+      fromCache: true,
+    };
+  }
+  throw err;
 }
 
 function loadCatalog(url: string, operation: string): Promise<CatalogLoad> {

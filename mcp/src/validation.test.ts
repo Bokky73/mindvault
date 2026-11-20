@@ -413,6 +413,24 @@ describe("flag arguments", () => {
     expect(err.issues[0].code).toBe("wrong_type");
     expect(err.message).toContain("boolean");
   });
+
+  it("codifies mindvault_reset confirm against resetGuard's allow-list and rejects 'on'/'off' (#221)", () => {
+    for (const value of [true, 1, "true", "TRUE", "1", " yes "]) {
+      expect(flag(validateToolArgs("mindvault_reset", { confirm: value }), "confirm")).toBe(true);
+    }
+    for (const value of [false, 0, "false", "0", "no"]) {
+      expect(flag(validateToolArgs("mindvault_reset", { confirm: value }), "confirm")).toBe(false);
+    }
+    for (const widened of ["on", "off", "y", "ok", "confirm", "sure", "enabled"]) {
+      const err = expectInvalid("mindvault_reset", { confirm: widened });
+      expect(err.issues[0].code).toBe("wrong_type");
+      expect(err.message).toContain("allowed strings: true, 1, yes, false, 0, no");
+      expect(err.message).not.toContain(`"${widened}"`);
+    }
+    // Same codified vocabulary applies to backup and state-migration confirm flags.
+    expectInvalid("mindvault_backup_state", { passphrase: "correct-horse", confirm: "on" });
+    expectInvalid("mindvault_apply_state_migration", { confirm: "on" });
+  });
 });
 
 describe("hash arguments", () => {

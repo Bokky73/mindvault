@@ -13,9 +13,11 @@
 extern crate alloc;
 
 mod anchor_status;
+mod attestation_hash;
 mod capability_version;
 mod role_events;
 pub use anchor_status::AnchorStatus;
+pub use attestation_hash::TaggedAttestationHash;
 pub use capability_version::ROLE_CAPABILITY_VERSION;
 pub use role_events::RoleRotation;
 
@@ -106,6 +108,9 @@ pub const TOP_TAGS_CAP: u32 = 20;
 /// via `register_batch`. Keeps execution bounded and prevents transaction
 /// timeouts.
 pub const MAX_BATCH_REGISTER: u32 = 10;
+/// Maximum number of IDs accepted by a single batch read (`get_many`,
+/// `get_many_ordered`, `get_owner_many`). Matches `MAX_STATE_BATCH`.
+pub const MAX_BATCH_READ: u32 = 20;
 /// Maximum number of prices that can be updated in one `set_price_many` call.
 pub const MAX_BATCH_PRICE_UPDATES: u32 = 10;
 /// Maximum number of ids accepted by a single `repair_index_chunk` call, so
@@ -181,6 +186,10 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("set_royalty_recipient", "creator"),
     ("set_royalties_disabled", "creator"),
     ("royalties_disabled", "—"),
+    ("set_resale_royalty", "original creator"),
+    ("get_resale_royalty", "—"),
+    ("preview_resale_royalty", "—"),
+    ("get_resale_royalty_summary", "—"),
     ("set_listed", "creator"),
     ("delist", "creator"),
     ("freeze_resource", "creator"),
@@ -198,6 +207,7 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get", "—"),
     ("get_resource_state", "—"),
     ("get_many", "—"),
+    ("get_many_ordered", "—"),
     ("get_resource_states", "—"),
     ("exists", "—"),
     ("exists_many", "—"),
@@ -224,12 +234,14 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("add_verifier", "admin"),
     ("remove_verifier", "admin"),
     ("rotate_verifier", "admin"),
+    ("reset_verifier", "admin"),
     ("is_verifier", "—"),
     ("list_role_members", "—"),
     ("set_verification_status", "verifier"),
     ("revoke_attestation", "verifier"),
     ("get_attestation_reason_hash", "—"),
     ("get_attestation_hash", "—"),
+    ("get_tagged_attestation_hash", "—"),
     ("compute_attestation_hash", "—"),
     ("verify_attestation_hash", "—"),
     ("get_memo_hash", "—"),
@@ -318,6 +330,9 @@ pub const METHOD_SCHEMA: &[(&str, &str)] = &[
     ("get_purchase_receipt", "—"),
     ("get_anchor_attempts", "—"),
     ("get_anchor_status", "—"),
+    ("record_anchor_failure", "settler"),
+    ("get_anchor_failure", "—"),
+    ("retry_anchor_purchase_receipt", "settler"),
     // ── Access leases ─────────────────────────────────────────────────────
     ("buy_lease", "holder"),
     ("renew_lease", "holder"),
@@ -365,7 +380,7 @@ pub const ERROR_SCHEMA: &[(u32, &str, &str)] = &[
     (15, "NoPendingTransfer", "No pending transfer exists for this resource."),
     (16, "ReservedId", "Resource id collides with a reserved word (e.g. `admin`, `registry`)."),
     (17, "PriceExceedsMax", "Price exceeds `MAX_PRICE`."),
-    (18, "AdminNotSet", "`add_verifier`, `remove_verifier`, `rotate_verifier`, or `repair_index` was called before any admin was bootstrapped."),
+    (18, "AdminNotSet", "`add_verifier`, `remove_verifier`, `rotate_verifier`, `reset_verifier`, or `repair_index` was called before any admin was bootstrapped."),
     (19, "NotVerifier", "`set_verification_status` was called by an address that does not hold the verifier role."),
     (20, "InvalidVerificationTransition", "The requested `VerificationStatus` transition is not allowed (e.g. same-status no-op, or reverting to `Pending`)."),
     (21, "AlreadyFrozen", "`freeze_metadata` was called on a resource whose metadata is already frozen."),
@@ -384,7 +399,7 @@ pub const ERROR_SCHEMA: &[(u32, &str, &str)] = &[
     (34, "FeeBpsTooHigh", "A fee or fee-destination basis-point value exceeds its configured ceiling."),
     (35, "TotalFeeTooHigh", "The combined fee policy or fee-destination split is invalid."),
     (36, "CountOverflow", "The global resource count would overflow `u32`."),
-    (37, "BatchTooLarge", "`get_many` or `get_owner_many` received more than 20 ids, or `repair_index_chunk` received more than `REPAIR_INDEX_CHUNK_CAP` (50) ids."),
+    (37, "BatchTooLarge", "`get_many`, `get_many_ordered`, or `get_owner_many` received more than 20 ids, or `repair_index_chunk` received more than `REPAIR_INDEX_CHUNK_CAP` (50) ids."),
     (38, "DuplicateReceipt", "A purchase receipt is already anchored for `(resource_id, buyer)`."),
     (39, "FlagReasonHashTooLong", "`reason_hash` in `set_flag_reason_hash` exceeds `MAX_FLAG_REASON_HASH_LEN` (64 bytes)."),
     (40, "ContractPaused", "A state-changing method was called while the registry is paused."),
@@ -429,6 +444,14 @@ pub const EVENT_SCHEMA: &[(&str, &str)] = &[
         "(prev_tags: Vec<String>, next_tags: Vec<String>)",
     ),
     ("setroyal", "(old_recipient: Option<Address>, new_recipient: Option<Address>)"),
+    (
+        "setresroy",
+        "ResaleRoyaltyUpdated { id, original_creator, old_bps, new_bps, recipient }",
+    ),
+    (
+        "resaleroy",
+        "ResaleRoyaltyCaptured { id, from, to, recipient, basis_amount, royalty_bps, royalty_amount, ledger }",
+    ),
     ("transfer", "(previous_owner: Address, new_owner: Address)"),
     ("propose", "(owner: Address, proposed: Address)"),
     ("cancel", "owner: Address"),
@@ -662,6 +685,9 @@ pub struct FlagDetails {
     pub last_moderator: Option<Address>,
 }
 
+/// Audit payload published under topic `verrot` when an admin atomically
+/// replaces a compromised or retiring verifier key via `rotate_verifier` or
+/// `reset_verifier`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerifierRotation {
@@ -738,6 +764,21 @@ pub struct BatchRegisterItem {
 pub struct BatchPriceUpdate {
     pub id: String,
     pub new_price: i128,
+}
+
+/// One typed positional entry returned by [`VaultRegistry::get_many_ordered`].
+///
+/// Pairs each requested `id` with `Some(Resource)` when registered or `None`
+/// when absent, preserving exact input ID ordering (including duplicates) so
+/// callers can consume results without re-ordering a map or zipping parallel
+/// vectors.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResourceBatchItem {
+    /// Requested resource ID (echoed in input order).
+    pub id: String,
+    /// Stored resource record when present, or `None` when absent.
+    pub resource: Option<Resource>,
 }
 
 /// Result of a batch registration attempt. Contains successfully registered
@@ -1006,6 +1047,15 @@ pub enum AuxKey {
     PaymentsPaused,
     /// Per-resource creator opt-out from future royalty routing. Value type: `bool`.
     RoyaltiesDisabled(String),
+    /// Original creator locked on first resale-royalty opt-in or first
+    /// ownership transfer. Value type: `Address`.
+    OriginalCreator(String),
+    /// Creator opt-in resale royalty configuration for a resource. Value type:
+    /// `ResaleRoyaltyConfig`.
+    ResaleRoyalty(String),
+    /// Cumulative resale royalty capture audit summary for a resource. Value
+    /// type: `ResaleRoyaltySummary`.
+    ResaleRoyaltySummary(String),
 }
 
 /// Payload of every role grant/revoke event (`addverif`/`rmverif`,
@@ -1425,6 +1475,11 @@ pub use batch_state_reads::MAX_STATE_BATCH;
 mod fee_split_preview;
 pub use fee_split_preview::FeeSplitPreview;
 mod recovery_target_check;
+mod resale_royalty;
+pub use resale_royalty::{
+    ResaleRoyaltyCaptured, ResaleRoyaltyConfig, ResaleRoyaltyPreview, ResaleRoyaltySummary,
+    ResaleRoyaltyUpdated, MAX_RESALE_ROYALTY_BPS,
+};
 mod role_inventory;
 pub use role_inventory::{RoleKind, RolePage, MAX_ROLE_MEMBERS, ROLE_PAGE_CAP};
 
@@ -1861,11 +1916,14 @@ impl VaultRegistry {
 
         let hash_key = DataKey::AttestationHash(id.clone());
         let stored_attestation_hash = match attestation_hash {
-            Some(hash) => Some(Self::normalize_attestation_hash(&env, &hash)?),
+            Some(hash) => Some(attestation_hash::normalize_attestation_hash(&env, &hash)?),
             None => None,
         };
         if let Some(hash) = stored_attestation_hash.clone() {
-            env.storage().persistent().set(&hash_key, &hash);
+            let existing: Option<String> = env.storage().persistent().get(&hash_key);
+            if existing.as_ref() != Some(&hash) {
+                env.storage().persistent().set(&hash_key, &hash);
+            }
             Self::bump_persistent(&env, &hash_key);
         } else {
             env.storage().persistent().remove(&hash_key);
@@ -1910,6 +1968,17 @@ impl VaultRegistry {
         hash
     }
 
+    /// Read the memoized attestation hash for a resource parsed into its
+    /// versioned algorithm tag and raw digest.
+    ///
+    /// Legacy untagged receipts default to `version = ATTESTATION_ENCODING_VERSION_V1`
+    /// (`1`) and `algorithm = DEFAULT_ATTESTATION_HASH_ALGORITHM` (`"sha256"`),
+    /// so historical attestations remain readable as verifiers evolve.
+    pub fn get_tagged_attestation_hash(env: Env, id: String) -> Option<TaggedAttestationHash> {
+        let raw = Self::get_attestation_hash(env.clone(), id)?;
+        attestation_hash::parse_tagged_attestation_hash(&env, &raw).ok()
+    }
+
     /// Revoke an existing attestation for a resource with an explicit, bounded reason hash.
     /// Only an authorized verifier may call this. Retains the verifier's status history
     /// without erasing prior records. Emits `attrevk`.
@@ -1933,7 +2002,7 @@ impl VaultRegistry {
             return Err(Error::InvalidVerificationTransition);
         }
 
-        let normalized_reason = Self::normalize_attestation_hash(&env, &reason_hash)?;
+        let normalized_reason = attestation_hash::normalize_attestation_hash(&env, &reason_hash)?;
 
         let reason_key = DataKey::AttestationReasonHash(id.clone());
         env.storage()
@@ -2010,8 +2079,14 @@ impl VaultRegistry {
         String::from_bytes(&env, &out)
     }
 
-    /// Whether the resource is currently in `status` and its stored
-    /// attestation hash equals `compute_attestation_hash(id, status, document_hash)`.
+    /// Whether the resource is currently in `status` and its memoized
+    /// attestation hash matches `compute_attestation_hash(id, status, document_hash)`
+    /// under canonical `(version, algorithm, digest)` comparison.
+    ///
+    /// Legacy untagged receipts stored prior to tagging are interpreted as
+    /// `(version = 1, algorithm = "sha256")` so they continue to verify, while
+    /// hashes tagged with a different algorithm (e.g. `poseidon`) or version
+    /// (e.g. `v2:sha256`) do not collide.
     pub fn verify_attestation_hash(
         env: Env,
         id: String,
@@ -2025,11 +2100,13 @@ impl VaultRegistry {
         if resource.verified != status {
             return false;
         }
-        match Self::get_attestation_hash(env.clone(), id.clone()) {
-            Some(stored) => {
-                stored == Self::compute_attestation_hash(env, id, status, document_hash)
-            }
-            None => false,
+        let Some(stored) = Self::get_tagged_attestation_hash(env.clone(), id.clone()) else {
+            return false;
+        };
+        let expected_raw = Self::compute_attestation_hash(env.clone(), id, status, document_hash);
+        match attestation_hash::parse_tagged_attestation_hash(&env, &expected_raw) {
+            Ok(expected) => stored == expected,
+            Err(_) => false,
         }
     }
 
@@ -2142,6 +2219,46 @@ impl VaultRegistry {
         Ok(Self::royalty_opt_out(&env, &id))
     }
 
+    /// Opt into, update, or clear (`royalty_bps == 0`) a capped resale royalty
+    /// (transfer fee) payable to the original creator (or `recipient`) on
+    /// secondary ownership transfers.
+    ///
+    /// Bounded by [`MAX_RESALE_ROYALTY_BPS`] (1,000 bp = 10 %); higher values
+    /// fail with [`Error::FeeBpsTooHigh`]. Only the original creator while
+    /// still owning the resource may configure or modify this setting; once
+    /// ownership transfers away, terms are locked (`Error::Unauthorized`).
+    /// Emits `setresroy`.
+    pub fn set_resale_royalty(
+        env: Env,
+        id: String,
+        royalty_bps: u32,
+        recipient: Option<Address>,
+    ) -> Result<(), Error> {
+        resale_royalty::set(&env, id, royalty_bps, recipient)
+    }
+
+    /// Read a resource's opt-in resale royalty configuration, or `None` when
+    /// the original creator has not opted in.
+    pub fn get_resale_royalty(env: Env, id: String) -> Result<Option<ResaleRoyaltyConfig>, Error> {
+        resale_royalty::get(&env, id)
+    }
+
+    /// Preview the exact integer floor resale royalty for `id` against
+    /// `sale_amount` (or `resource.price` when `sale_amount` is `None`).
+    pub fn preview_resale_royalty(
+        env: Env,
+        id: String,
+        sale_amount: Option<i128>,
+    ) -> Result<ResaleRoyaltyPreview, Error> {
+        resale_royalty::preview(&env, id, sale_amount)
+    }
+
+    /// Read the cumulative resale royalty capture summary for `id`. Returns
+    /// zero counters when no royalty-bearing secondary transfer has occurred.
+    pub fn get_resale_royalty_summary(env: Env, id: String) -> Result<ResaleRoyaltySummary, Error> {
+        resale_royalty::summary(&env, id)
+    }
+
     pub fn transfer_ownership(env: Env, id: String, new_creator: Address) -> Result<(), Error> {
         Self::require_not_paused(&env)?;
         Self::validate_resource_id(&id)?;
@@ -2152,6 +2269,7 @@ impl VaultRegistry {
             return Err(Error::AlreadyOwner);
         }
         let previous_owner = resource.creator.clone();
+        let basis_price = resource.price;
         resource.creator = new_creator.clone();
         Self::save(&env, &mut resource);
         Self::move_creator_index(&env, &previous_owner, &new_creator, &id, resource.listed);
@@ -2162,8 +2280,15 @@ impl VaultRegistry {
         }
 
         env.events().publish(
-            (symbol_short!("transfer"), id),
-            (previous_owner, new_creator),
+            (symbol_short!("transfer"), id.clone()),
+            (previous_owner.clone(), new_creator.clone()),
+        );
+        resale_royalty::on_ownership_transfer(
+            &env,
+            &id,
+            &previous_owner,
+            &new_creator,
+            basis_price,
         );
         Ok(())
     }
@@ -2201,6 +2326,7 @@ impl VaultRegistry {
         let mut resource = Self::load(&env, &id)?;
         Self::ensure_mutable(&resource)?;
         let previous_owner = resource.creator.clone();
+        let basis_price = resource.price;
         resource.creator = pending_owner.clone();
 
         // Clear dispute flag on ownership transfer - disputes are tied to the
@@ -2213,8 +2339,15 @@ impl VaultRegistry {
         env.storage().persistent().remove(&key);
 
         env.events().publish(
-            (symbol_short!("transfer"), id),
-            (previous_owner, pending_owner),
+            (symbol_short!("transfer"), id.clone()),
+            (previous_owner.clone(), pending_owner.clone()),
+        );
+        resale_royalty::on_ownership_transfer(
+            &env,
+            &id,
+            &previous_owner,
+            &pending_owner,
+            basis_price,
         );
         Ok(())
     }
@@ -2890,23 +3023,60 @@ impl VaultRegistry {
 
     /// Read several resources in one invocation, preserving input order.
     /// Missing resources are represented by `None`; valid resources are
-    /// returned as `Some(Resource)`. The batch is capped to bound execution
-    /// and response size.
+    /// returned as `Some(Resource)`. The batch is capped at [`MAX_BATCH_READ`]
+    /// (20) IDs to bound execution and response size.
     pub fn get_many(env: Env, ids: Vec<String>) -> Result<Vec<Option<Resource>>, Error> {
-        const MAX_BATCH_SIZE: u32 = 20;
-        if ids.len() > MAX_BATCH_SIZE {
+        if ids.len() > MAX_BATCH_READ {
             return Err(Error::BatchTooLarge);
+        }
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            Self::validate_resource_id(&id)?;
         }
         let mut result: Vec<Option<Resource>> = Vec::new(&env);
         for i in 0..ids.len() {
             let id = ids.get(i).unwrap();
-            Self::validate_resource_id(&id)?;
             let key = DataKey::Resource(id);
             let resource = env.storage().persistent().get(&key);
             if resource.is_some() {
                 Self::bump_persistent(&env, &key);
             }
             result.push_back(resource);
+        }
+        Ok(result)
+    }
+
+    /// Read several resources in one invocation, returning typed
+    /// [`ResourceBatchItem`] entries in exact input ID order.
+    ///
+    /// Unlike `get_many` (which returns positional `Option<Resource>` slots),
+    /// each element pairs the requested `id` with its looked-up `resource`
+    /// (`Some(Resource)` or `None`), preserving duplicates and ordering so
+    /// clients do not need to re-order a map or zip parallel vectors.
+    ///
+    /// Capped at [`MAX_BATCH_READ`] (20) IDs (`Error::BatchTooLarge`). Any
+    /// invalid ID fails the whole call with `Error::InvalidResourceId` before
+    /// reading storage. Bumps persistent TTL for each found resource.
+    pub fn get_many_ordered(
+        env: Env,
+        ids: Vec<String>,
+    ) -> Result<Vec<ResourceBatchItem>, Error> {
+        if ids.len() > MAX_BATCH_READ {
+            return Err(Error::BatchTooLarge);
+        }
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            Self::validate_resource_id(&id)?;
+        }
+        let mut result: Vec<ResourceBatchItem> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            let key = DataKey::Resource(id.clone());
+            let resource: Option<Resource> = env.storage().persistent().get(&key);
+            if resource.is_some() {
+                Self::bump_persistent(&env, &key);
+            }
+            result.push_back(ResourceBatchItem { id, resource });
         }
         Ok(result)
     }
@@ -2957,17 +3127,20 @@ impl VaultRegistry {
     }
 
     /// Batch owner lookup. Returns a `Vec<Option<Address>>` parallel to `ids`.
-    /// Missing resources are `None`; invalid resource ids fail the whole call,
-    /// matching `get_many` and keeping malformed multi-select requests visible.
+    /// Missing resources are `None`; invalid resource ids fail the whole call
+    /// before reading storage, matching `get_many` and keeping malformed
+    /// multi-select requests visible. Capped at [`MAX_BATCH_READ`] (20) IDs.
     pub fn get_owner_many(env: Env, ids: Vec<String>) -> Result<Vec<Option<Address>>, Error> {
-        const MAX_BATCH_SIZE: u32 = 20;
-        if ids.len() > MAX_BATCH_SIZE {
+        if ids.len() > MAX_BATCH_READ {
             return Err(Error::BatchTooLarge);
+        }
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            Self::validate_resource_id(&id)?;
         }
         let mut result: Vec<Option<Address>> = Vec::new(&env);
         for i in 0..ids.len() {
             let id = ids.get(i).unwrap();
-            Self::validate_resource_id(&id)?;
             let key = DataKey::Resource(id);
             let resource: Option<Resource> = env.storage().persistent().get(&key);
             if resource.is_some() {
@@ -3409,8 +3582,20 @@ impl VaultRegistry {
     }
 
     /// The active scheduled pause deadline, if one exists.
-    /// Bumps the instance storage TTL to keep the entry alive for active monitors.
+    ///
+    /// Returns `None` when the contract is not paused, when an indefinite
+    /// pause (`set_paused(admin, true)`) is active without a deadline, or once
+    /// the ledger timestamp reaches or passes the deadline. Bumps the instance
+    /// storage TTL when an active deadline is returned.
     pub fn pause_until(env: Env) -> Option<u64> {
+        let paused = env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false);
+        if !paused {
+            return None;
+        }
         let pause_until = env
             .storage()
             .instance()
@@ -3465,6 +3650,16 @@ impl VaultRegistry {
         Ok(())
     }
 
+    /// Atomically replace a compromised or retiring verifier key with a fresh
+    /// replacement key in one audited transaction (#228).
+    ///
+    /// Unlike calling `remove_verifier` followed by `add_verifier`, this flow
+    /// validates both keys upfront (`old_verifier` must be registered,
+    /// `new_verifier` must differ and not already be registered), updates the
+    /// role inventory, and emits `rmverif`, `addverif`, and the `verrot`
+    /// (`VerifierRotation { old_verifier, new_verifier, ledger }`) audit event
+    /// atomically. Allowed while the registry is paused so operators can
+    /// recover from a compromised verifier key during an incident.
     pub fn rotate_verifier(
         env: Env,
         old_verifier: Address,
@@ -3496,6 +3691,20 @@ impl VaultRegistry {
             },
         );
         Ok(())
+    }
+
+    /// Admin recovery entrypoint to reset a compromised verifier key to a
+    /// replacement key atomically (#228).
+    ///
+    /// Delegates to [`Self::rotate_verifier`] so both entrypoints share
+    /// identical validation, role-inventory updates, and `rmverif`/`addverif`/
+    /// `verrot` audit events.
+    pub fn reset_verifier(
+        env: Env,
+        old_verifier: Address,
+        new_verifier: Address,
+    ) -> Result<(), Error> {
+        Self::rotate_verifier(env, old_verifier, new_verifier)
     }
 
     /// Page through the addresses holding `role` (admin, verifier, moderator
@@ -4388,14 +4597,13 @@ impl VaultRegistry {
         };
         if let Some(reason) = throttled {
             let failure = AnchorFailure {
-                resource_id: resource_id.clone(),
+                resource_id,
                 buyer,
                 receipt_hash,
                 reason,
                 ledger: now,
             };
-            env.events()
-                .publish((symbol_short!("anchrfail"), resource_id), failure);
+            Self::emit_anchor_failure(&env, failure);
             return Ok(false);
         }
 
@@ -4412,8 +4620,7 @@ impl VaultRegistry {
                 reason,
                 ledger: now,
             };
-            env.events()
-                .publish((symbol_short!("anchrfail"), resource_id.clone()), failure);
+            Self::emit_anchor_failure(&env, failure);
             if attempts.attempts >= MAX_ANCHOR_ATTEMPTS {
                 // Emitted once per pair, on the attempt that reaches the cap.
                 env.events()
@@ -4566,7 +4773,7 @@ impl VaultRegistry {
         }
 
         let failure = AnchorFailure {
-            resource_id: resource_id.clone(),
+            resource_id,
             buyer,
             receipt_hash,
             reason: AnchorFailureReason::VerifierUnavailable,
@@ -4574,8 +4781,7 @@ impl VaultRegistry {
         };
         env.storage().persistent().set(&failure_key, &failure);
         Self::bump_persistent(&env, &failure_key);
-        env.events()
-            .publish((symbol_short!("anchrfail"), resource_id), failure);
+        Self::emit_anchor_failure(&env, failure);
         Ok(())
     }
 
@@ -5382,6 +5588,7 @@ impl VaultRegistry {
         }
 
         let previous_owner = resource.creator.clone();
+        let basis_price = resource.price;
         resource.creator = new_creator.clone();
         Self::save(&env, &mut resource);
         Self::move_creator_index(&env, &previous_owner, &new_creator, &id, resource.listed);
@@ -5418,6 +5625,14 @@ impl VaultRegistry {
         env.events().publish(
             (symbol_short!("transfer"), id.clone()),
             (previous_owner.clone(), new_creator.clone()),
+        );
+
+        resale_royalty::on_ownership_transfer(
+            &env,
+            &id,
+            &previous_owner,
+            &new_creator,
+            basis_price,
         );
 
         // Emit the terms-aware event for callers that need the full context.
@@ -5567,6 +5782,31 @@ impl VaultRegistry {
         Ok(())
     }
 
+    /// Compute the minimum allowed resource price in USDC base units for a
+    /// given [`FeeConfig`].
+    ///
+    /// Without an active fee config (or when both rates are zero), the floor
+    /// is `1` base unit. Otherwise the reserve floor is
+    /// `platform_fee_bps + royalty_bps + 1`, ensuring both `royalty_bps < price`
+    /// and `platform_fee_bps + royalty_bps < price` so tiny prices cannot yield
+    /// negative or zero-remainder splits.
+    pub(crate) fn min_price_for_fee_config(config: Option<&FeeConfig>) -> i128 {
+        let combined_fee_bps: i128 = config
+            .map(|c| i128::from(c.platform_fee_bps.saturating_add(c.royalty_bps)))
+            .unwrap_or(0);
+        combined_fee_bps + 1
+    }
+
+    /// Active minimum allowed resource price in USDC base units under the
+    /// currently stored [`DataKey::FeeConfig`].
+    pub(crate) fn minimum_price_floor(env: &Env) -> i128 {
+        let config = env
+            .storage()
+            .instance()
+            .get::<DataKey, FeeConfig>(&DataKey::FeeConfig);
+        Self::min_price_for_fee_config(config.as_ref())
+    }
+
     fn validate_price(env: &Env, price: i128) -> Result<(), Error> {
         if price <= 0 {
             return Err(Error::InvalidPrice);
@@ -5574,22 +5814,12 @@ impl VaultRegistry {
         if price > MAX_PRICE {
             return Err(Error::PriceExceedsMax);
         }
-        // Enforce the minimum creator-share invariant: the price in stroops must
-        // strictly exceed the *combined* fee take (platform_fee_bps +
-        // royalty_bps) so the creator always receives a positive remainder.
-        //
-        // Checking only royalty_bps (the old rule) was insufficient: a
-        // platform_fee_bps > 0 stacked on top of royalty_bps could consume the
-        // entire remaining amount, leaving the creator with zero even when
-        // royalty_bps alone was below the price.  No fee config set means no
-        // fees are owed, so the check is a no-op until one is configured.
-        let combined_fee_bps: i128 = env
-            .storage()
-            .instance()
-            .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
-            .map(|config| i128::from(config.platform_fee_bps + config.royalty_bps))
-            .unwrap_or(0);
-        if combined_fee_bps >= price {
+        // Enforce the explicit reserve-price / minimum-royalty floor: the price
+        // in USDC base units must strictly exceed the *combined* fee take
+        // (`platform_fee_bps + royalty_bps`, which also enforces
+        // `price > royalty_bps`) so the creator always receives a positive
+        // remainder. No fee config set yields a floor of 1 base unit.
+        if price < Self::minimum_price_floor(env) {
             return Err(Error::InvalidPrice);
         }
         Ok(())
@@ -5819,46 +6049,6 @@ impl VaultRegistry {
         } else {
             Err(Error::InvalidMetadataPointer)
         }
-    }
-
-    fn normalize_attestation_hash(env: &Env, hash: &String) -> Result<String, Error> {
-        let bytes = Self::string_bytes(hash);
-        let mut separator = None;
-        for (idx, byte) in bytes.iter().enumerate() {
-            if *byte == b':' {
-                separator = Some(idx);
-                break;
-            }
-        }
-
-        if let Some(separator) = separator {
-            let algorithm = &bytes[..separator];
-            let digest = &bytes[separator + 1..];
-            if algorithm.is_empty()
-                || algorithm.len() > MAX_ATTESTATION_HASH_ALGORITHM_LEN as usize
-                || digest.is_empty()
-                || digest.len() > MAX_ATTESTATION_HASH_LEN as usize
-            {
-                return Err(Error::AttestationHashTooLong);
-            }
-            for &byte in algorithm {
-                if !matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_') {
-                    return Err(Error::AttestationHashTooLong);
-                }
-            }
-            return Ok(hash.clone());
-        }
-
-        if bytes.is_empty() || bytes.len() > MAX_ATTESTATION_HASH_LEN as usize {
-            return Err(Error::AttestationHashTooLong);
-        }
-        let mut tagged = alloc::vec::Vec::with_capacity(
-            DEFAULT_ATTESTATION_HASH_ALGORITHM.len() + 1 + bytes.len(),
-        );
-        tagged.extend_from_slice(DEFAULT_ATTESTATION_HASH_ALGORITHM.as_bytes());
-        tagged.push(b':');
-        tagged.extend_from_slice(&bytes);
-        Ok(String::from_bytes(env, &tagged))
     }
 
     /// Normalize every tag in the input list to lowercase ASCII, validate
@@ -6359,6 +6549,15 @@ impl VaultRegistry {
         None
     }
 
+    /// Emit the structured `anchrfail` event scoped to `failure.resource_id`.
+    /// Shared by every non-reverting anchor-failure path so topic shape and
+    /// payload stay identical across verifier and settler entry points.
+    fn emit_anchor_failure(env: &Env, failure: AnchorFailure) {
+        let resource_id = failure.resource_id.clone();
+        env.events()
+            .publish((symbol_short!("anchrfail"), resource_id), failure);
+    }
+
     /// Persist an [`AnchorFailure`] for `(resource_id, buyer)` and emit
     /// `anchrfail`, returning `Ok(false)` so callers can `return` it directly.
     /// Overwrites any earlier record: the newest reason describes the current
@@ -6373,7 +6572,7 @@ impl VaultRegistry {
     ) -> Result<bool, Error> {
         let key = DataKey::AnchorFailure(resource_id.clone(), buyer.clone());
         let failure = AnchorFailure {
-            resource_id: resource_id.clone(),
+            resource_id,
             buyer,
             receipt_hash,
             reason,
@@ -6381,8 +6580,7 @@ impl VaultRegistry {
         };
         env.storage().persistent().set(&key, &failure);
         Self::bump_persistent(env, &key);
-        env.events()
-            .publish((symbol_short!("anchrfail"), resource_id), failure);
+        Self::emit_anchor_failure(env, failure);
         Ok(false)
     }
 
@@ -6496,16 +6694,28 @@ impl VaultRegistry {
             .publish((symbol_short!("anchor"), resource_id), anchor);
     }
 
-    /// Return `ContractPaused` if the emergency pause flag is set.
+    /// Return `ContractPaused` if the emergency pause flag is active.
     ///
     /// Every write method calls this at its entry point. Read-only methods
     /// never call it, so they remain available while the registry is paused.
+    /// When a scheduled maintenance window (`DataKey::PauseUntil`) has already
+    /// expired, this lazily clears the stale `Paused` and `PauseUntil` entries
+    /// before allowing the write to proceed.
     fn require_not_paused(env: &Env) -> Result<(), Error> {
         if Self::pause_is_active(env) {
-            Err(Error::ContractPaused)
-        } else {
-            Ok(())
+            return Err(Error::ContractPaused);
         }
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            env.storage().instance().set(&DataKey::Paused, &false);
+            env.storage().instance().remove(&DataKey::PauseUntil);
+            Self::bump_instance(env);
+        }
+        Ok(())
     }
 
     /// Return whether the registry is paused after applying any scheduled

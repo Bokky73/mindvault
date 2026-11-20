@@ -84,6 +84,7 @@ import {
   _setMockMode,
 } from "./index.js";
 import {
+  getCatalogSnapshot,
   recordCatalogSnapshot,
   recordPreviewSnapshot,
   _clearCatalogCache,
@@ -240,6 +241,34 @@ describe("prewarmCatalogCache", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network error"));
     const result = await prewarmCatalogCache();
     expect(result).toContain("Catalog pre-warm failed");
+  });
+
+  it("retries transient gateway errors during revalidation and unpins a stale snapshot (#220)", async () => {
+    recordCatalogSnapshot([{ id: "stale-001", title: "Stale Entry", price: "1.00" }], undefined, 1);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockResponse({ error: "bad gateway" }, false, 502))
+      .mockResolvedValueOnce(mockResponse(sampleResources));
+
+    const result = await prewarmCatalogCache();
+    expect(result).toContain("Catalog pre-warmed");
+    expect(result).toContain("2 resource(s)");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(getCatalogSnapshot()?.resources).toEqual(sampleResources);
+  });
+
+  it("reports revalidation failure instead of claiming success from an existing stale snapshot (#220)", async () => {
+    recordCatalogSnapshot([{ id: "stale-001", title: "Stale Entry", price: "1.00" }], undefined, 1);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockResponse({ error: "unavailable" }, false, 503),
+    );
+
+    const result = await prewarmCatalogCache();
+    expect(result).toContain("Catalog pre-warm failed");
+    // The existing offline snapshot stays preserved for fallback reads.
+    expect(getCatalogSnapshot()?.resources).toEqual([
+      { id: "stale-001", title: "Stale Entry", price: "1.00" },
+    ]);
   });
 });
 
@@ -1533,6 +1562,20 @@ describe("dry-run – buy validation", () => {
     await expect(
       dispatchTool("mindvault_buy", { resourceId: "res-001", dryRun: true }),
     ).rejects.toThrow(/exceeds the automatic payment ceiling/);
+  });
+
+  it("allows near-limit casual buys in dry-run when MINDVAULT_MAX_AUTO_PAY_USDC is unset or blank", async () => {
+    for (const envValue of [undefined, "", "   "]) {
+      vi.stubEnv("MINDVAULT_MAX_AUTO_PAY_USDC", envValue);
+      for (const price of ["9.99", "9.9999999", "10.00"]) {
+        vi.spyOn(globalThis, "fetch").mockResolvedValue(mockResponse({ price }));
+        const result = await dispatchTool("mindvault_buy", {
+          resourceId: "res-001",
+          dryRun: true,
+        });
+        expect(JSON.parse(result).intentions.estimatedPrice).toBe(price);
+      }
+    }
   });
 
   it("returns dry-run result without submitting payment", async () => {
@@ -2899,6 +2942,20 @@ describe("setTags (#832)", () => {
     try {
       const res = await dispatchTool("mindvault_set_tags", { resourceId: "res-001", tags: [] });
       expect(res).toContain("Tags: (none)");
+    } finally {
+      delete process.env.MINDVAULT_MOCK;
+    }
+  });
+
+  it("normalizes and deduplicates tags when setTags is called directly", async () => {
+    _setAgentWallet({
+      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
+    });
+    process.env.MINDVAULT_MOCK = "1";
+    try {
+      const res = await setTags("res-001", ["  AI ", "ai", "Dataset"]);
+      expect(res).toContain("Tags: ai, dataset");
     } finally {
       delete process.env.MINDVAULT_MOCK;
     }

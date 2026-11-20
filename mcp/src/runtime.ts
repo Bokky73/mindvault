@@ -253,6 +253,45 @@ const SERVICE_OPERATION: Record<ErrorSource, string> = {
   registry: "Registry request failed",
 };
 
+async function parseJsonResponse(
+  res: Response,
+): Promise<{ ok: boolean; status: number; data: any; headers: Record<string, string> }> {
+  const responseHeaders: Record<string, string> = {};
+  res.headers.forEach((value, key) => {
+    responseHeaders[key.toLowerCase()] = value;
+  });
+  const text = await res.text();
+  try {
+    return { ok: res.ok, status: res.status, data: JSON.parse(text), headers: responseHeaders };
+  } catch {
+    return { ok: res.ok, status: res.status, data: text, headers: responseHeaders };
+  }
+}
+
+async function jsonFetchOnce(
+  url: string,
+  init?: RequestInit,
+): Promise<{ ok: boolean; status: number; data: any; headers: Record<string, string> }> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body =
+    typeof init?.body === "string" ? init.body : init?.body ? JSON.stringify(init.body) : undefined;
+  const baseHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": USER_AGENT,
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  const headers = signMutatingHeaders(url, method, baseHeaders, body);
+  const service = timeoutServiceForUrl(url);
+  const res = await fetchWithTimeout(
+    httpFetch,
+    url,
+    { ...init, method, body: body ?? init?.body, headers },
+    service,
+    TIMEOUTS[service],
+  );
+  return parseJsonResponse(res);
+}
+
 async function jsonFetch(
   url: string,
   init?: RequestInit,
@@ -286,16 +325,7 @@ async function jsonFetch(
     throw mcpError(mapTransportError({ operation: SERVICE_OPERATION[source], source, error: err }));
   }
 
-  const responseHeaders: Record<string, string> = {};
-  res.headers.forEach((value, key) => {
-    responseHeaders[key.toLowerCase()] = value;
-  });
-  const text = await res.text();
-  try {
-    return { ok: res.ok, status: res.status, data: JSON.parse(text), headers: responseHeaders };
-  } catch {
-    return { ok: res.ok, status: res.status, data: text, headers: responseHeaders };
-  }
+  return parseJsonResponse(res);
 }
 
 function requireWallet(): AgentWallet {
@@ -390,6 +420,7 @@ export {
   timeoutServiceForUrl,
   SERVICE_OPERATION,
   jsonFetch,
+  jsonFetchOnce,
   requireWallet,
   requireApiKey,
   publisherCredential,

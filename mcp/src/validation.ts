@@ -32,6 +32,7 @@ import { CATALOG_MAX_LIMIT, CATALOG_SORT_VALUES } from "./catalogFilters.js";
 import { REGISTRY_LIST_MAX_LIMIT } from "./registryPagination.js";
 import { RECEIPT_EXPORT_MAX_LIMIT } from "./receipts.js";
 import { DEBUG_BUNDLE_MAX_AUDIT_LINES } from "./debugBundleSchema.js";
+import { RESET_CONFIRM_STRINGS, RESET_DECLINE_STRINGS } from "./resetGuard.js";
 import { TOOL_DEFINITIONS } from "./tools.js";
 import { MAX_SETTLEMENT_TIMEOUT_MS, MIN_SETTLEMENT_INTERVAL_MS } from "./settlement.js";
 import { StrKey } from "@stellar/stellar-sdk";
@@ -91,6 +92,17 @@ export interface ArgumentSpec {
    * service expects a bare digest (e.g. a Stellar transaction hash).
    */
   bareHex?: boolean;
+  /**
+   * Explicit allow-list of truthy string spellings — `flag` only (#221).
+   * When set, overrides the default generic `TRUE_STRINGS` set so widening
+   * generic flag parsing cannot widen a high-impact confirmation.
+   */
+  allowedTrueStrings?: readonly string[];
+  /**
+   * Explicit allow-list of falsy string spellings — `flag` only (#221).
+   * When set, overrides the default generic `FALSE_STRINGS` set.
+   */
+  allowedFalseStrings?: readonly string[];
 }
 
 export type ToolArgumentSpec = Record<string, ArgumentSpec>;
@@ -156,6 +168,20 @@ const CONFIRM_MAINNET: ArgumentSpec = { kind: "flag" };
 
 /** Confirmation flag for paid operations (see paidOperations.ts). */
 const CONFIRM_PAID: ArgumentSpec = { kind: "flag" };
+
+/**
+ * Confirmation flag codified against `resetGuard.ts` (#221).
+ *
+ * Uses the exact frozen `RESET_CONFIRM_STRINGS` and `RESET_DECLINE_STRINGS`
+ * vocabularies instead of the wider generic flag sets (`"on"` / `"off"`), so
+ * widening generic flag parsing cannot coerce an unintended string into `true`
+ * and bypass reset preview/echo mode.
+ */
+const RESET_CONFIRM: ArgumentSpec = {
+  kind: "flag",
+  allowedTrueStrings: RESET_CONFIRM_STRINGS,
+  allowedFalseStrings: RESET_DECLINE_STRINGS,
+};
 
 /** Preview flag: publish/buy report what they would do without paying. */
 const DRY_RUN: ArgumentSpec = { kind: "flag" };
@@ -385,17 +411,16 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
     timeoutMs: { kind: "integer", min: 0, max: MAX_SETTLEMENT_TIMEOUT_MS },
     intervalMs: { kind: "integer", min: MIN_SETTLEMENT_INTERVAL_MS },
   },
-  // `confirm` is what resetGuard.isResetConfirmed reads. It was advertised in
-  // ListTools and absent here, so every confirmed reset failed validation as an
-  // unknown argument and the tool was permanently stuck in preview mode (#596).
+  // `confirm` is codified against `resetGuard.ts`'s exact allow-list (#596, #221)
+  // so widened generic flag spellings like `"on"` cannot slip through into true.
   mindvault_reset: {
-    confirm: { kind: "flag" },
+    confirm: RESET_CONFIRM,
     all: { kind: "flag" },
     confirmMainnet: CONFIRM_MAINNET,
   },
-  mindvault_backup_state: { passphrase: PASSPHRASE, confirm: { kind: "flag" } },
+  mindvault_backup_state: { passphrase: PASSPHRASE, confirm: RESET_CONFIRM },
   mindvault_preview_state_migration: {},
-  mindvault_apply_state_migration: { confirm: { kind: "flag" } },
+  mindvault_apply_state_migration: { confirm: RESET_CONFIRM },
   mindvault_export_state_selective: {},
   mindvault_import_state_selective: {
     blob: { kind: "string", required: true, maxLength: 131_072 },
@@ -776,19 +801,33 @@ function validateStringArray(
 function validateFlag(
   field: string,
   value: unknown,
+  spec: ArgumentSpec,
   issues: ValidationIssue[],
 ): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    if (TRUE_STRINGS.has(normalized)) return true;
-    if (FALSE_STRINGS.has(normalized)) return false;
+    const isTrue = spec.allowedTrueStrings
+      ? spec.allowedTrueStrings.includes(normalized)
+      : TRUE_STRINGS.has(normalized);
+    if (isTrue) return true;
+    const isFalse = spec.allowedFalseStrings
+      ? spec.allowedFalseStrings.includes(normalized)
+      : FALSE_STRINGS.has(normalized);
+    if (isFalse) return false;
   }
+  const allowedHint =
+    spec.allowedTrueStrings || spec.allowedFalseStrings
+      ? ` (allowed strings: ${[
+          ...(spec.allowedTrueStrings ?? []),
+          ...(spec.allowedFalseStrings ?? []),
+        ].join(", ")})`
+      : "";
   issues.push({
     field,
     code: "wrong_type",
-    message: `${field} must be a boolean (true/false); received ${typeName(value)}.`,
+    message: `${field} must be a boolean (true/false)${allowedHint}; received ${typeName(value)}.`,
   });
   return undefined;
 }
@@ -1017,7 +1056,7 @@ export function validateToolArgs(tool: string, rawArgs: unknown): ValidatedArgs 
 
     switch (fieldSpec.kind) {
       case "flag": {
-        const flag = validateFlag(field, value, issues);
+        const flag = validateFlag(field, value, fieldSpec, issues);
         if (flag !== undefined) out[field] = flag;
         break;
       }
