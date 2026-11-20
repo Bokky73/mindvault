@@ -297,3 +297,9 @@ MIT
 
 <!-- handsoff-issue-42 -->
 - #42: [Contract] [Bug] Enforce bounded retry windows for anchor recovery paths
+
+<!-- handsoff-issue-198 -->
+- #198: [MCP] [Feature] Add mindvault_royalty tool to set royalty recipient
+
+<!-- handsoff-issue-199 -->
+- #199: [MCP] [Feature] Add mindvault_set_tags handler (complete the paused tool)
