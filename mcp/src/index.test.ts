@@ -98,7 +98,9 @@ const TESTNET_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZL
 
 function mockResponse(data: unknown, ok = true, status = 200): Response {
   const responseData =
-    typeof data === "object" && data !== null && "balances" in data &&
+    typeof data === "object" &&
+    data !== null &&
+    "balances" in data &&
     Array.isArray((data as { balances?: unknown }).balances)
       ? {
           ...(data as Record<string, unknown>),
@@ -2688,6 +2690,27 @@ describe("transferOwnership", () => {
     }
   });
 
+  it("includes optional handoff details in mock mode", async () => {
+    _setAgentWallet({
+      publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+      secretKey: "SD1234567890123456789012345678901234567890123456789012345",
+    });
+    process.env.MINDVAULT_MOCK = "1";
+    try {
+      const res = await transferOwnership(
+        "res-001",
+        "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+        "sha256:0123456789abcdef",
+        true,
+      );
+      const parsed = JSON.parse(res);
+      expect(parsed.newTermsHash).toBe("sha256:0123456789abcdef");
+      expect(parsed.attestationReset).toBe(true);
+    } finally {
+      delete process.env.MINDVAULT_MOCK;
+    }
+  });
+
   it("dispatches through dispatchTool with valid arguments", async () => {
     _setAgentWallet({
       publicKey: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
@@ -2698,8 +2721,13 @@ describe("transferOwnership", () => {
       const res = await dispatchTool("mindvault_transfer_ownership", {
         resourceId: "res-001",
         newCreator: "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+        newTermsHash: "sha256:0123456789abcdef",
+        resetAttestation: true,
       });
-      expect(res).toContain("success");
+      const parsed = JSON.parse(res);
+      expect(parsed.status).toBe("success");
+      expect(parsed.newTermsHash).toBe("sha256:0123456789abcdef");
+      expect(parsed.attestationReset).toBe(true);
     } finally {
       delete process.env.MINDVAULT_MOCK;
     }

@@ -390,12 +390,20 @@ export function mockSetPrice(resourceId: string, price: string): string {
   );
 }
 
-export function mockTransferOwnership(resourceId: string, newCreator: string): string {
+export function mockTransferOwnership(
+  resourceId: string,
+  newCreator: string,
+  newTermsHash?: string,
+  resetAttestation = false,
+): string {
   return JSON.stringify(
     {
       status: "success",
       resourceId,
       newCreator,
+      ...(newTermsHash !== undefined || resetAttestation
+        ? { newTermsHash: newTermsHash ?? null, attestationReset: resetAttestation }
+        : {}),
       txHash: `MOCK_TX_TRANSFER_${resourceId}`,
       explorerUrl: explorerTxUrl(`MOCK_TX_TRANSFER_${resourceId}`),
       source: "on-chain (mock)",

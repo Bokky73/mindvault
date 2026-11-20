@@ -470,6 +470,8 @@ export const TOOL_ARGUMENT_SPECS: Record<string, ToolArgumentSpec> = {
   mindvault_transfer_ownership: {
     resourceId: RESOURCE_ID,
     newCreator: { ...STELLAR_ADDRESS, required: true },
+    newTermsHash: { kind: "string", maxLength: 64 },
+    resetAttestation: { kind: "flag" },
     confirmMainnet: CONFIRM_MAINNET,
     confirmPaid: CONFIRM_PAID,
   },

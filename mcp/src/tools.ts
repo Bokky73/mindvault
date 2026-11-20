@@ -1308,7 +1308,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "mindvault_transfer_ownership",
     description:
-      "Transfer ownership of a registered resource on the vault registry contract to a new creator wallet address (G… key). Only the current resource owner may call this.",
+      "Transfer ownership of a registered resource on the vault registry contract to a new creator wallet address (G… key). Only the current resource owner may call this. Optionally set the incoming owner's terms hash and/or reset the resource's attestation atomically.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1321,6 +1321,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: "string",
           description: "The Stellar public key (G… , 56 chars) of the new resource owner.",
           examples: ["GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH"],
+        },
+        newTermsHash: {
+          type: "string",
+          maxLength: 64,
+          description:
+            "Optional terms hash (up to 64 characters) to bind to the incoming owner in the same transfer.",
+          examples: ["sha256:0123456789abcdef"],
+        },
+        resetAttestation: {
+          type: "boolean",
+          description:
+            "When true, clear the resource's existing attestation hash in the same transfer so it can be re-verified.",
         },
         confirmMainnet: {
           type: "boolean",
