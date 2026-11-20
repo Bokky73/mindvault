@@ -2805,13 +2805,19 @@ exports[`tool schema snapshots > mindvault_pending_transfer > input schema 1`] =
 exports[`tool schema snapshots > mindvault_pending_transfer > output schema 1`] = `
 {
   "properties": {
+    "contract": {
+      "type": "string",
+    },
     "found": {
       "type": "boolean",
     },
     "message": {
       "type": "string",
     },
-    "pendingOwner": {
+    "network": {
+      "type": "string",
+    },
+    "proposedNewOwner": {
       "type": [
         "string",
         "null",
@@ -2820,11 +2826,19 @@ exports[`tool schema snapshots > mindvault_pending_transfer > output schema 1`] 
     "resourceId": {
       "type": "string",
     },
+    "rpc": {
+      "type": "string",
+    },
+    "source": {
+      "type": "string",
+    },
   },
   "required": [
+    "source",
     "resourceId",
     "found",
     "message",
+    "contract",
   ],
   "type": "object",
 }
