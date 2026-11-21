@@ -45,3 +45,16 @@ additional rows.
 These guarantees are additive: existing clients that read JSONL or CSV exports
 continue to work, since escaping only affects values that would otherwise be
 ambiguous or unsafe.
+
+## Audit log rotation and read lock serialization
+
+- **Serialized rotation:** `mcp/src/auditLogRotation.ts` serializes file appends
+  and rotation operations via an internal mutex and shared read locks.
+- **Read locks and tail preservation:** Active read locks (held via
+  `withReadLockSync` / `withReadLock` during tail inspections such as
+  `collectAuditTail`) defer rotation and buffering writes until all readers
+  drain.
+- **Flushing on rotation:** Before renaming the active log file to `.1`, any
+  buffered pre-rotation tail entries are written and flushed with `fsync`,
+  ensuring no log entries are dropped when rotation crosses an active read lock
+  or concurrent append.
