@@ -3898,8 +3898,14 @@ impl VaultRegistry {
         if config.royalty_bps > MAX_FEE_BPS {
             return Err(Error::FeeBpsTooHigh);
         }
-        // Then validate the combined ceiling
-        if config.platform_fee_bps + config.royalty_bps > MAX_FEE_BPS {
+        // Then validate the combined ceiling and creator minimum share floor
+        let total_fee_bps = config
+            .platform_fee_bps
+            .checked_add(config.royalty_bps)
+            .ok_or(Error::TotalFeeTooHigh)?;
+        if total_fee_bps > MAX_FEE_BPS
+            || FEE_BPS_DENOM.saturating_sub(total_fee_bps) < MIN_CREATOR_SHARE_BPS
+        {
             return Err(Error::TotalFeeTooHigh);
         }
         let destination = Self::load_fee_destination(&env);
