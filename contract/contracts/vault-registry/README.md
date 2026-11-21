@@ -140,6 +140,47 @@ the host, so the contract would stop accepting writes entirely. Change them
 together, and re-run `cargo test` in `contract/`: the TTL tests assert the
 observed on-ledger TTL against these constants.
 
+### Resource lifecycle state machine
+
+New resources begin in `Listed`. `freeze_resource` freezes activity but keeps
+metadata, price, tags, and ownership mutable unless the separate
+`freeze_metadata` path has also been used.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Listed
+    Listed --> Delisted: creator
+    Delisted --> Listed: creator
+    Listed --> Frozen: creator
+    Delisted --> Frozen: creator
+    Listed --> Disputed: admin
+    Delisted --> Disputed: admin
+    Frozen --> Listed: creator reactivate
+    Frozen --> Disputed: admin
+    Listed --> Tombstoned: admin
+    Delisted --> Tombstoned: admin
+    Frozen --> Tombstoned: admin
+    Disputed --> Listed: admin resolve
+    Disputed --> Delisted: admin resolve
+    Disputed --> Frozen: admin resolve
+    Disputed --> Tombstoned: admin
+```
+
+Use the transition matrix below rather than treating arrows as unrestricted
+moves. The exact admin and creator permissions are enforced on-chain.
+
+| Current state | `Listed`                          | `Delisted`                    | `Frozen`                      | `Disputed`               | `Tombstoned`                   |
+| ------------- | --------------------------------- | ----------------------------- | ----------------------------- | ------------------------ | ------------------------------ |
+| `Listed`      | no-op via `set_listed(true)`      | creator                       | creator via `freeze_resource` | admin via `open_dispute` | admin via `tombstone_resource` |
+| `Delisted`    | creator via `set_listed(true)`    | no-op via `set_listed(false)` | creator via `freeze_resource` | admin via `open_dispute` | admin via `tombstone_resource` |
+| `Frozen`      | creator via `reactivate_resource` | no                            | no                            | admin via `open_dispute` | admin via `tombstone_resource` |
+| `Disputed`    | admin via `resolve_dispute`       | admin via `resolve_dispute`   | admin via `resolve_dispute`   | no                       | admin via `tombstone_resource` |
+| `Tombstoned`  | no                                | no                            | no                            | no                       | terminal                       |
+
+`resolve_dispute` may return a disputed resource to `Listed`, `Delisted`, or
+`Frozen`. `Tombstoned` has no exit transition and the same resource id cannot
+be registered again.
+
 ---
 
 ## Contract version compatibility
@@ -357,6 +398,22 @@ stellar contract invoke \
   --price 10000000 \
   --metadata 'ipfs://QmYwAPJzv5CZsnAzt8auV39tMVyQ4cZ3QqcSBuKkP3jRq8' \
   --tags '["dataset","research"]'
+
+# Register with an immutable metadata/content hash binding
+stellar contract invoke \
+  --id $CONTRACT --rpc-url $RPC --network-passphrase "Test SDF Network ; September 2015" \
+  --source my-identity \
+  -- register_with_hash \
+  --creator $(stellar keys address my-identity) \
+  --id swcn98besxpp6t1u8e77fqz3 \
+  --price 10000000 \
+  --metadata 'ipfs://QmYwAPJzv5CZsnAzt8auV39tMVyQ4cZ3QqcSBuKkP3jRq8' \
+  --tags '["dataset","research"]' \
+  --content-hash 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'
+
+# Omitting content_hash (the generated SDK represents this as None) preserves
+# the legacy mutable-metadata behavior; supplying it permanently freezes the
+# metadata pointer against update_metadata and set_metadata_pointers.
 
 # Update the price to 0.50 USDC (5_000_000 base units)
 stellar contract invoke \
@@ -672,6 +729,18 @@ const tx = await registry.register({
   tags: ["dataset", "research"], // 0–8 tags, each ≤ 32 bytes; normalized to lowercase
 });
 await tx.signAndSend();
+
+// Immutable metadata variant: a supplied content hash freezes the metadata
+// pointer at registration and rejects later pointer changes.
+const immutableTx = await registry.register_with_hash({
+  creator: "GB6LGS25QN3DFNXKFWCTKB3FMKZFLW7OIKCX6HJKKIEPV3H2JJKBIMHV",
+  id: "swcn98besxpp6t1u8e77fqz3",
+  price: ONE_USDC,
+  metadata: "ipfs://QmYwAPJzv5CZsnAzt8auV39tMVyQ4cZ3QqcSBuKkP3jRq8",
+  tags: ["dataset", "research"],
+  content_hash: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+});
+await immutableTx.signAndSend();
 ```
 
 ### Mutation examples
@@ -925,9 +994,9 @@ always rejected: `admin`, `null`, `registry`, `api`, `index`, `root`, `system`
 
 ## Role Management Flows Summary
 
-| Role | Grant / Nominate Entrypoint | Revoke / Rotate Entrypoint | Read / Audit Query |
-| :--- | :--- | :--- | :--- |
-| `Admin` | `nominate_new_admin(new_admin)` / `accept_admin(pending)` | `cancel_admin_nomination(admin)` / `recover_admin(new_admin)` | `admin()`, `pending_admin()`, `pending_admin_expiry()` |
-| `Verifier` | `add_verifier(verifier)` / `add_verifiers(batch)` | `remove_verifier(verifier)` / `rotate_verifier(old, new)` | `is_verifier(addr)`, `list_verifiers()` |
-| `Settler` | `add_settler(settler)` / `set_payment_settler(settler)` | `remove_settler(settler)` / `rotate_payment_settler(new)` | `is_settler(addr)`, `payment_settler()` |
-| `Moderator` | `add_moderator(admin, moderator)` | `remove_moderator(admin, moderator)` | `is_moderator(addr)`, `list_moderators()` |
+| Role        | Grant / Nominate Entrypoint                               | Revoke / Rotate Entrypoint                                    | Read / Audit Query                                     |
+| :---------- | :-------------------------------------------------------- | :------------------------------------------------------------ | :----------------------------------------------------- |
+| `Admin`     | `nominate_new_admin(new_admin)` / `accept_admin(pending)` | `cancel_admin_nomination(admin)` / `recover_admin(new_admin)` | `admin()`, `pending_admin()`, `pending_admin_expiry()` |
+| `Verifier`  | `add_verifier(verifier)` / `add_verifiers(batch)`         | `remove_verifier(verifier)` / `rotate_verifier(old, new)`     | `is_verifier(addr)`, `list_verifiers()`                |
+| `Settler`   | `add_settler(settler)` / `set_payment_settler(settler)`   | `remove_settler(settler)` / `rotate_payment_settler(new)`     | `is_settler(addr)`, `payment_settler()`                |
+| `Moderator` | `add_moderator(admin, moderator)`                         | `remove_moderator(admin, moderator)`                          | `is_moderator(addr)`, `list_moderators()`              |
