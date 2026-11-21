@@ -232,6 +232,24 @@ Successful buys also append a local receipt under `~/.mindvault/purchases.json` 
 
 ---
 
+### 11b. `mindvault_verify_attestation`
+
+Verifies that the content received after purchase matches the verifier's on-chain attestation hash. AI agents can use this content integrity check before consuming or executing downloaded digital resources.
+
+**Input:**
+
+```json
+{
+  "resourceId": "cm7x8y9z",
+  "attestationHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}
+```
+
+**Output:**
+Returns a structured verification report with `verified: true/false`, `matches: true/false`, `registeredAttestationHash`, and an actionable `summary`.
+
+---
+
 ### 12. `mindvault_purchase_history`
 
 Read-only list of locally persisted purchase receipts. Optional filters:
