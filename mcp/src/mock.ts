@@ -463,6 +463,62 @@ export function mockPendingTransfer(resourceId: string): string {
   );
 }
 
+export function mockPublisherTerms(
+  operation: string,
+  creator?: string,
+  termsHash?: string,
+): string {
+  if (operation === "get") {
+    const address = creator ?? "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH";
+    if (
+      address === "mock-unknown" ||
+      address === "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+    ) {
+      return JSON.stringify(
+        {
+          creator: address,
+          termsHash: null,
+          found: false,
+          source: "on-chain (mock)",
+        },
+        null,
+        2,
+      );
+    }
+    return JSON.stringify(
+      {
+        creator: address,
+        termsHash: "mock-terms-hash-1",
+        found: true,
+        source: "on-chain (mock)",
+      },
+      null,
+      2,
+    );
+  }
+
+  if (operation === "set") {
+    if (!termsHash || !termsHash.trim()) throw new Error("termsHash is required for set.");
+    const trimmed = termsHash.trim();
+    if (trimmed.length > 64) {
+      throw new Error("termsHash must be at most 64 characters.");
+    }
+    const address = creator ?? "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH";
+    return JSON.stringify(
+      {
+        status: "success",
+        creator: address,
+        termsHash: trimmed,
+        source: "on-chain (mock)",
+      },
+      null,
+      2,
+    );
+  }
+
+  throw new Error(`Unknown operation "${operation}". Use "get" or "set".`);
+}
+
 export function mockSetListed(resourceId: string, listed: boolean): string {
   return JSON.stringify(
     {

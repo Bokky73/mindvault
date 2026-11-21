@@ -347,6 +347,40 @@ Manages catalog availability by listing or delisting a resource on-chain.
 
 ---
 
+### 18. `mindvault_terms`
+
+Gets or sets the creator's on-chain licensing terms hash on the vault-registry contract. Publishers use `set` to bind licensing terms to their identity, and agents or consumers use `get` to inspect terms before interacting or purchasing.
+
+**Input (Set):**
+
+```json
+{
+  "operation": "set",
+  "termsHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+**Input (Get):**
+
+```json
+{
+  "operation": "get",
+  "creator": "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH"
+}
+```
+
+**Example output (Get):**
+
+```json
+{
+  "creator": "GA6HCMBLTZS5VYYBCATRBRZ3BZJMAFUDKYYF6AH6MVCMGWMRDNSWJPIH",
+  "termsHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "found": true
+}
+```
+
+---
+
 ## Acceptance walkthrough
 
 Following the steps above, a single operator running two MCP sessions should be able to:
