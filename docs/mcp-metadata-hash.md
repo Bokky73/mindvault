@@ -75,12 +75,12 @@ chars), optionally prefixed with "sha256:"/"sha512:" (or "-"); case-insensitive.
 
 ## Where the format applies
 
-| Tool                          | Argument                          | Notes                                                                                            |
-| ----------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `mindvault_check_consistency` | `expectedMetadataHash` (optional) | Compared against the `contentHash` anchored on-chain                                             |
-| `mindvault_preview_metadata_hash` | `resourceId`                  | Reports the anchored digest (or why there is none) without a comparison — see below              |
-| `mindvault_tx_status`         | `txHash`                          | A Stellar transaction hash is a sha256 digest; normalized to bare lowercase hex for the RPC call |
-| `mindvault_update_metadata`   | `metadata`                        | HTTP(S) URL pointers are normalized via `normalizeMetadataPointer` before on-chain submission, history recording, and response output |
+| Tool                              | Argument                          | Notes                                                                                                                                 |
+| --------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `mindvault_check_consistency`     | `expectedMetadataHash` (optional) | Compared against the `contentHash` anchored on-chain                                                                                  |
+| `mindvault_preview_metadata_hash` | `resourceId`                      | Reports the anchored digest (or why there is none) without a comparison — see below                                                   |
+| `mindvault_tx_status`             | `txHash`                          | A Stellar transaction hash is a sha256 digest; normalized to bare lowercase hex for the RPC call                                      |
+| `mindvault_update_metadata`       | `metadata`                        | HTTP(S) URL pointers are normalized via `normalizeMetadataPointer` before on-chain submission, history recording, and response output |
 
 ### Pointer normalization across publish and update
 
@@ -138,6 +138,40 @@ the anchor, without a comparison.
 A malformed `expectedMetadataHash` is rejected before any lookup happens —
 comparing against a digest that is not in the fixed format could only produce a
 misleading "mismatch".
+
+### Immutable metadata registration
+
+When publishing content that must not move after registration, the contract
+`register_with_hash` method accepts the canonical metadata pointer hash as
+`content_hash`. Supplying a hash makes the pointer immutable for that resource:
+`update_metadata` and `set_metadata_pointers` return `MetadataFrozen`. Passing
+`None` preserves the existing mutable registration behavior.
+
+MCP and TypeScript clients should verify the canonical content hash locally
+before registration and use `mindvault_preview_metadata_hash` or the contract
+`get` result to audit the on-chain anchor afterward.
+
+### Attestation integrity helper
+
+Off-chain verifiers can recompute an expected attestation record with the pure
+`compute_attestation_hash(id, status, document_hash)` contract method. It reads
+no storage and requires no wallet authentication. `verify_attestation_hash`
+then returns `true` only when the resource is in the supplied status and the
+stored attestation digest matches the canonical recomputation.
+
+The expected preimage is:
+
+```text
+"mindvault-attestation-v1"
+|| u32_be(length(id))
+|| id
+|| u32_be(status)
+|| document_hash
+```
+
+The default SHA-256 result is `sha256:<64 lowercase hex>`. Legacy untagged
+SHA-256 receipts remain compatible, while different algorithms or encoding
+versions do not verify as collisions.
 
 ### Previewing an anchor before buying
 
