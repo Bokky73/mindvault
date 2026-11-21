@@ -271,3 +271,11 @@ open.
 - [dynamic paywall middleware](../server/src/middleware/dynamicPaywall.ts)
 - [vault-registry contract source](../contract/contracts/vault-registry/src/lib.rs)
 - [Soroban SDK — persisting data](https://soroban.stellar.org/docs/learn/persisting-data)
+
+## Lease Overlay State & Fee Invariance Summary
+
+| Lease Tier | Duration (Ledgers) | State Progression | Access Check Rule |
+| :--- | :---: | :--- | :--- |
+| `Hour` | `720` | `Pending -> Active -> Expired / Revoked` | `state == Active && current_ledger < expiry_ledger` |
+| `Day` | `17_280` | `Pending -> Active -> Expired / Revoked` | `state == Active && current_ledger < expiry_ledger` |
+| `Week` | `120_960` | `Pending -> Active -> Expired / Revoked` | `state == Active && current_ledger < expiry_ledger` |
