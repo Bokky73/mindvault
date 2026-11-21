@@ -3257,10 +3257,8 @@ impl VaultRegistry {
     /// Return the ledger sequence at which the pending admin nomination expires.
     /// Bumps the instance storage TTL to keep the entry alive for active monitors.
     pub fn pending_admin_expiry(env: Env) -> Option<u32> {
-        let expiry = env.storage().instance().get(&DataKey::PendingAdminExpiry);
-        if expiry.is_some() {
-            Self::bump_instance(&env);
-        }
+        let expiry: Option<u32> = env.storage().instance().get(&DataKey::PendingAdminExpiry);
+        Self::bump_instance(&env);
         expiry
     }
 
