@@ -5918,7 +5918,7 @@ impl VaultRegistry {
         // The referenced resource must exist and be for sale: a delisted,
         // frozen, disputed, or tombstoned resource must not accept payments.
         let resource = Self::load(env, &resource_id)?;
-        if resource.state != ResourceState::Listed {
+        if resource.frozen || resource.state != ResourceState::Listed {
             return Err(Error::ResourceNotMutable);
         }
 
